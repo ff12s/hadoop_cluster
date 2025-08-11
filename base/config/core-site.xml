@@ -18,4 +18,8 @@
         <name>hadoop.proxyuser.hadoop.groups</name>
         <value>*</value>
     </property>
+    <property>
+        <name>hadoop.proxyuser.hadoop.users</name>
+        <value>*</value>
+    </property>
 </configuration>

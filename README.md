@@ -34,7 +34,7 @@
 ### Дальше (при необходимости)
 - [x] Spark (Spark History Server, тест SparkPi и PySpark на YARN)
 - [x] JupyterLab (PySpark на YARN, каталог `/notebooks`)
-- [ ] Kyubi
+- [x] Kyuubi (Thrift Binary 10009, Spark SQL engine на YARN)
 
 ## Запуск
 
@@ -142,6 +142,27 @@ docker exec hadoop-namenode hdfs dfs -chmod 733  /opt/hive/tmp
 ```bash
 tests\test-spark.bat
 ```
+
+## Kyuubi (Spark SQL over JDBC/Thrift)
+```bash
+tests\test-kyuubi.bat
+```
+- Ручное подключение через Beeline:
+```bash
+docker exec -it hadoop-hiveserver2 beeline -u 'jdbc:hive2://kyuubi:10009' -n hadoop
+```
+- Что делает тест:
+  - Проверяет порт 10009 и процесс Kyuubi
+  - Подключается beeline, выполняет DDL/DML в `kyuubi_db.kyuubi_table`
+  - Проверяет появление данных в HDFS и приложений SPARK в YARN
+
+### Конфигурация Kyuubi
+- Тип движка: `kyuubi.engine.type=SPARK_SQL` в `kyuubi/config/kyuubi-defaults.conf`
+- Spark/YARN: event logging в HDFS (`/spark-events`), warehouse в HDFS, master `yarn`, deploy-mode `client`
+- Имперсонация (proxyuser): в `base/config/core-site.xml`:
+  - `hadoop.proxyuser.hadoop.hosts=*`
+  - `hadoop.proxyuser.hadoop.groups=*`
+  (разрешает серверу Kyuubi запускать движки от имени `hadoop`).
 
 ## JupyterLab
 - Том с ноутбуками монтируется в `/notebooks` (как оговорено [[memory:4954373]]).
