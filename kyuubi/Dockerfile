@@ -12,11 +12,11 @@ ENV PATH=$PATH:$SPARK_HOME/bin:$SPARK_HOME/sbin:$KYUUBI_HOME/bin
 USER root
 
 # Install Spark and Kyuubi
-RUN aria2c -x 16 -s 16 -d /tmp -o spark-${SPARK_VERSION}-bin-hadoop3.tgz \
-    https://archive.apache.org/dist/spark/spark-${SPARK_VERSION}/spark-${SPARK_VERSION}-bin-hadoop3.tgz && \
-    tar -xzf /tmp/spark-${SPARK_VERSION}-bin-hadoop3.tgz -C /opt && \
-    ln -s /opt/spark-${SPARK_VERSION}-bin-hadoop3 /opt/spark && \
-    rm -f /tmp/spark-${SPARK_VERSION}-bin-hadoop3.tgz && \
+RUN aria2c -x 16 -s 16 -d /tmp -o spark-${SPARK_VERSION}-bin-hadoop3-scala2.13.tgz \
+    https://archive.apache.org/dist/spark/spark-${SPARK_VERSION}/spark-${SPARK_VERSION}-bin-hadoop3-scala2.13.tgz && \
+    tar -xzf /tmp/spark-${SPARK_VERSION}-bin-hadoop3-scala2.13.tgz -C /opt && \
+    ln -s /opt/spark-${SPARK_VERSION}-bin-hadoop3-scala2.13 /opt/spark && \
+    rm -f /tmp/spark-${SPARK_VERSION}-bin-hadoop3-scala2.13.tgz && \
     aria2c -x 16 -s 16 -d /tmp -o apache-kyuubi-${KYUUBI_VERSION}-bin.tgz \
     https://archive.apache.org/dist/kyuubi/kyuubi-${KYUUBI_VERSION}/apache-kyuubi-${KYUUBI_VERSION}-bin.tgz && \
     tar -xzf /tmp/apache-kyuubi-${KYUUBI_VERSION}-bin.tgz -C /opt && \

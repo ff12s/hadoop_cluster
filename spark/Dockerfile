@@ -9,12 +9,12 @@ ENV PATH=$PATH:$SPARK_HOME/bin:$SPARK_HOME/sbin
 
 USER root
 
-# Установка Spark (бинарник для Hadoop 3)
-RUN aria2c -x 16 -s 16 -d /tmp -o spark-${SPARK_VERSION}-bin-hadoop3.tgz \
-    https://archive.apache.org/dist/spark/spark-${SPARK_VERSION}/spark-${SPARK_VERSION}-bin-hadoop3.tgz && \
-    tar -xzf /tmp/spark-${SPARK_VERSION}-bin-hadoop3.tgz -C /opt && \
-    ln -s /opt/spark-${SPARK_VERSION}-bin-hadoop3 /opt/spark && \
-    rm -f /tmp/spark-${SPARK_VERSION}-bin-hadoop3.tgz && \
+# Установка Spark (бинарник для Hadoop 3, Scala 2.13)
+RUN aria2c -x 16 -s 16 -d /tmp -o spark-${SPARK_VERSION}-bin-hadoop3-scala2.13.tgz \
+    https://archive.apache.org/dist/spark/spark-${SPARK_VERSION}/spark-${SPARK_VERSION}-bin-hadoop3-scala2.13.tgz && \
+    tar -xzf /tmp/spark-${SPARK_VERSION}-bin-hadoop3-scala2.13.tgz -C /opt && \
+    ln -s /opt/spark-${SPARK_VERSION}-bin-hadoop3-scala2.13 /opt/spark && \
+    rm -f /tmp/spark-${SPARK_VERSION}-bin-hadoop3-scala2.13.tgz && \
     mkdir -p /opt/spark/work /opt/spark/logs && \
     chown -R hadoop:hadoop /opt/spark*
 

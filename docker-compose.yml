@@ -28,6 +28,7 @@ services:
       - ./logs:/mnt/logs
       - namenode-data:/opt/hadoop/dfs/name
       - namenode-logs:/opt/hadoop/logs
+      - ./hive/config/hive-site.xml:/opt/hadoop/etc/hadoop/hive-site.xml:ro
     environment:
       - HADOOP_CONF_DIR=/opt/hadoop/etc/hadoop
     command: ["/opt/scripts/start-namenode.sh"]
@@ -46,6 +47,7 @@ services:
       - ./logs:/mnt/logs
       - datanode-data:/opt/hadoop/dfs/data
       - datanode-logs:/opt/hadoop/logs
+      - ./hive/config/hive-site.xml:/opt/hadoop/etc/hadoop/hive-site.xml:ro
     environment:
       - HADOOP_CONF_DIR=/opt/hadoop/etc/hadoop
     depends_on:
@@ -101,6 +103,8 @@ services:
     volumes:
       - ./data:/mnt/data
       - ./logs:/mnt/logs
+      - ./hive/config/hive-site.xml:/opt/hadoop/etc/hadoop/hive-site.xml:ro
+      - ./hive/config/hive-site.xml:/opt/spark/conf/hive-site.xml:ro
     depends_on:
       - namenode
       - datanode
@@ -121,6 +125,8 @@ services:
       - ./notebooks:/notebooks
       - ./data:/mnt/data
       - ./logs:/mnt/logs
+      - ./hive/config/hive-site.xml:/opt/hadoop/etc/hadoop/hive-site.xml:ro
+      - ./hive/config/hive-site.xml:/opt/spark/conf/hive-site.xml:ro
     depends_on:
       - namenode
       - datanode
@@ -145,6 +151,7 @@ services:
     volumes:
       - ./data:/mnt/data
       - ./logs:/mnt/logs
+      - ./hive/config/hive-site.xml:/opt/hadoop/etc/hadoop/hive-site.xml:ro
     command: ["/opt/scripts/start-kyuubi.sh"]
 
 volumes:
