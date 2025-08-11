@@ -1,0 +1,141 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:13
+    container_name: hadoop-postgres
+    hostname: postgres
+    environment:
+      POSTGRES_DB: hive_metastore
+      POSTGRES_USER: hive
+      POSTGRES_PASSWORD: hive
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  namenode:
+    build:
+      context: ./base
+      dockerfile: Dockerfile
+    container_name: hadoop-namenode
+    hostname: namenode
+    ports:
+      - "9870:9870"  # HDFS Web UI
+      - "8088:8088"  # YARN Web UI
+    volumes:
+      - ./data:/mnt/data
+      - ./logs:/mnt/logs
+      - namenode-data:/opt/hadoop/dfs/name
+      - namenode-logs:/opt/hadoop/logs
+    environment:
+      - HADOOP_CONF_DIR=/opt/hadoop/etc/hadoop
+    command: ["/opt/scripts/start-namenode.sh"]
+
+  datanode:
+    build:
+      context: ./base
+      dockerfile: Dockerfile
+    container_name: hadoop-datanode
+    hostname: datanode
+    ports:
+      - "9864:9864"  # DataNode Web UI
+      - "8042:8042"  # YARN Web UI
+    volumes:
+      - ./data:/mnt/data
+      - ./logs:/mnt/logs
+      - datanode-data:/opt/hadoop/dfs/data
+      - datanode-logs:/opt/hadoop/logs
+    environment:
+      - HADOOP_CONF_DIR=/opt/hadoop/etc/hadoop
+    depends_on:
+      - namenode
+    command: ["/opt/scripts/start-datanode.sh"]
+
+  hive-metastore:
+    build:
+      context: ./hive
+      dockerfile: Dockerfile
+    container_name: hadoop-hive-metastore
+    hostname: hive-metastore
+    ports:
+      - "9083:9083"  # Hive Metastore
+    volumes:
+      - ./data:/mnt/data
+      - ./logs:/mnt/logs
+      - hive-warehouse:/opt/hive/warehouse
+      - hive-logs:/opt/hive/logs
+    depends_on:
+      - postgres
+      - namenode
+    command: ["/opt/scripts/start-metastore.sh"]
+
+  hiveserver2:
+    build:
+      context: ./hive
+      dockerfile: Dockerfile
+    container_name: hadoop-hiveserver2
+    hostname: hiveserver2
+    ports:
+      - "10000:10000"  # HiveServer2 Thrift
+      - "10002:10002"  # HiveServer2 Web UI
+    volumes:
+      - ./data:/mnt/data
+      - ./logs:/mnt/logs
+      - hive-warehouse:/opt/hive/warehouse
+      - hive-logs:/opt/hive/logs
+    depends_on:
+      - hive-metastore
+    command: ["/opt/scripts/start-hiveserver2.sh"]
+
+  spark-history:
+    build:
+      context: ./spark
+      dockerfile: Dockerfile
+    container_name: hadoop-spark-history
+    hostname: spark-history
+    ports:
+      - "18080:18080"  # Spark History Server UI
+    environment:
+      - HADOOP_CONF_DIR=/opt/hadoop/etc/hadoop
+    volumes:
+      - ./data:/mnt/data
+      - ./logs:/mnt/logs
+    depends_on:
+      - namenode
+      - datanode
+    command: ["/opt/scripts/start-spark-history.sh"]
+
+  jupyter:
+    build:
+      context: ./jupyter
+      dockerfile: Dockerfile
+    container_name: hadoop-jupyter
+    hostname: jupyter
+    ports:
+      - "8888:8888"  # JupyterLab
+    environment:
+      - HADOOP_CONF_DIR=/opt/hadoop/etc/hadoop
+      - SPARK_VERSION=${SPARK_VERSION}
+    volumes:
+      - ./notebooks:/notebooks
+      - ./data:/mnt/data
+      - ./logs:/mnt/logs
+    depends_on:
+      - namenode
+      - datanode
+    command: ["/opt/scripts/start-jupyter.sh"]
+
+volumes:
+  postgres-data:
+  namenode-data:
+  namenode-logs:
+  datanode-data:
+  datanode-logs:
+  hive-warehouse:
+  hive-logs:
+
+networks:
+  default:
+    name: hadoopclusternet
+    driver: bridge

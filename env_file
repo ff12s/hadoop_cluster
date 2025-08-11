@@ -1,0 +1,20 @@
+# Версии компонентов
+HADOOP_VERSION=3.3.6
+HIVE_VERSION=3.1.3
+SPARK_VERSION=3.5.2
+SCALA_VERSION=2.13
+PYTHON_VERSION=3.8
+KYUBI_VERSION=1.8.0
+JUPYTER_VERSION=latest
+
+# Настройки Java
+JAVA_VERSION=8
+
+# Настройки сети
+HADOOP_NETWORK=hadoop-network
+
+# Настройки пользователей
+HADOOP_USER=hadoop
+HADOOP_GROUP=hadoop
+HADOOP_UID=1000
+HADOOP_GID=1000
