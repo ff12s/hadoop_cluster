@@ -9,4 +9,13 @@
         <name>hadoop.tmp.dir</name>
         <value>/opt/hadoop/tmp</value>
     </property>
+    <!-- Allow Kyuubi server user to impersonate session users on Hadoop services -->
+    <property>
+        <name>hadoop.proxyuser.hadoop.hosts</name>
+        <value>*</value>
+    </property>
+    <property>
+        <name>hadoop.proxyuser.hadoop.groups</name>
+        <value>*</value>
+    </property>
 </configuration>

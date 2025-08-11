@@ -126,6 +126,27 @@ services:
       - datanode
     command: ["/opt/scripts/start-jupyter.sh"]
 
+  kyuubi:
+    build:
+      context: ./kyuubi
+      dockerfile: Dockerfile
+    container_name: hadoop-kyuubi
+    hostname: kyuubi
+    depends_on:
+      - namenode
+      - datanode
+      - spark-history
+    ports:
+      - "10009:10009"  # Thrift Binary
+    environment:
+      - HADOOP_CONF_DIR=/opt/hadoop/etc/hadoop
+      - SPARK_VERSION=${SPARK_VERSION}
+      - KYUUBI_VERSION=${KYUUBI_VERSION}
+    volumes:
+      - ./data:/mnt/data
+      - ./logs:/mnt/logs
+    command: ["/opt/scripts/start-kyuubi.sh"]
+
 volumes:
   postgres-data:
   namenode-data:

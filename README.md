@@ -115,6 +115,7 @@ hadoop_cluster/
 - Hive Metastore (Thrift): `tcp://localhost:9083`
  - Spark History Server: `http://localhost:18080`
  - JupyterLab: `http://localhost:8888`
+ - Kyuubi (Thrift Binary): `tcp://localhost:10009`
 
 ## Подключение к Hive из DBeaver
 Проверено подключение через DBeaver [[memory:5342975]].
