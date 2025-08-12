@@ -12,10 +12,11 @@ echo "Building base image..."
 docker build -t hadoop-cluster-base:latest ./base
 
 echo "Building cluster images..."
-docker-compose build
+docker-compose --env-file env_file build spark-image
+docker-compose --env-file env_file build
 
 echo "Starting cluster..."
-docker-compose up -d
+docker-compose --env-file env_file up -d
 
 echo "Checking HDFS health..."
 docker exec hadoop-namenode /opt/scripts/check-hdfs.sh

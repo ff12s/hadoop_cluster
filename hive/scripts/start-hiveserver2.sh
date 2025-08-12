@@ -23,7 +23,7 @@ exec $HIVE_HOME/bin/hiveserver2 \
   --hiveconf hive.server2.webui.port=10002 \
   --hiveconf hive.server2.webui.host=0.0.0.0 \
   --hiveconf hive.metastore.uris=thrift://hive-metastore:9083 \
-  --hiveconf hive.metastore.warehouse.dir=/opt/hive/warehouse \
-  --hiveconf hive.exec.scratchdir=/opt/hive/tmp \
+  --hiveconf hive.metastore.warehouse.dir=hdfs://namenode:9000/user/hive/warehouse \
+  --hiveconf hive.exec.scratchdir=hdfs://namenode:9000/tmp/hive \
   --hiveconf hive.server2.enable.doAs=false \
   --hiveconf hive.root.logger=INFO,console

@@ -1,10 +1,70 @@
 version: '3.8'
 
 services:
+  spark-image:
+    build:
+      context: ./spark
+      dockerfile: Dockerfile
+      args:
+        SPARK_VERSION: ${SPARK_VERSION}
+        OPENLINEAGE_VERSION: ${OPENLINEAGE_VERSION}
+    image: hadoop-cluster-spark:latest
+    profiles: ["build"]
+  marquez-db:
+    image: postgres:13
+    container_name: hadoop-marquez-db
+    hostname: marquez-db
+    environment:
+      POSTGRES_USER: marquez
+      POSTGRES_PASSWORD: marquez
+      POSTGRES_DB: marquez
+    volumes:
+      - marquez-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U marquez"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  marquez:
+    image: marquezproject/marquez:latest
+    container_name: hadoop-marquez
+    hostname: marquez
+    depends_on:
+      marquez-db:
+        condition: service_healthy
+    environment:
+      MARQUEZ_DB_HOST: marquez-db
+      MARQUEZ_DB_PORT: 5432
+      MARQUEZ_DB: marquez
+      MARQUEZ_USER: marquez
+      MARQUEZ_PASSWORD: marquez
+      MARQUEZ_PORT: 5000
+      MARQUEZ_CONFIG: /usr/src/app/config/config.yml
+    ports:
+      - "5000:5000"  # OpenLineage/Marquez API
+    volumes:
+      - ./marquez/config:/usr/src/app/config:ro
+
+  marquez-web:
+    image: marquezproject/marquez-web:latest
+    container_name: hadoop-marquez-web
+    hostname: marquez-web
+    depends_on:
+      - marquez
+    environment:
+      MARQUEZ_HOST: marquez
+      MARQUEZ_PORT: 5000
+      MARQUEZ_URL: http://marquez:5000
+      WEB_PORT: 3000
+    ports:
+      - "3000:3000"  # Marquez Web UI
   postgres:
     image: postgres:13
     container_name: hadoop-postgres
     hostname: postgres
+    env_file:
+      - env_file
     environment:
       POSTGRES_DB: hive_metastore
       POSTGRES_USER: hive
@@ -18,8 +78,14 @@ services:
     build:
       context: ./base
       dockerfile: Dockerfile
+      args:
+        HADOOP_VERSION: ${HADOOP_VERSION:-3.3.6}
+        PYTHON_VERSION: ${PYTHON_VERSION:-3.8}
+        SCALA_VERSION: ${SCALA_VERSION:-2.13.8}
     container_name: hadoop-namenode
     hostname: namenode
+    env_file:
+      - env_file
     ports:
       - "9870:9870"  # HDFS Web UI
       - "8088:8088"  # YARN Web UI
@@ -37,8 +103,14 @@ services:
     build:
       context: ./base
       dockerfile: Dockerfile
+      args:
+        HADOOP_VERSION: ${HADOOP_VERSION:-3.3.6}
+        PYTHON_VERSION: ${PYTHON_VERSION:-3.8}
+        SCALA_VERSION: ${SCALA_VERSION:-2.13.8}
     container_name: hadoop-datanode
     hostname: datanode
+    env_file:
+      - env_file
     ports:
       - "9864:9864"  # DataNode Web UI
       - "8042:8042"  # YARN Web UI
@@ -58,8 +130,12 @@ services:
     build:
       context: ./hive
       dockerfile: Dockerfile
+      args:
+        HIVE_VERSION: ${HIVE_VERSION:-3.1.3}
     container_name: hadoop-hive-metastore
     hostname: hive-metastore
+    env_file:
+      - env_file
     ports:
       - "9083:9083"  # Hive Metastore
     volumes:
@@ -76,8 +152,12 @@ services:
     build:
       context: ./hive
       dockerfile: Dockerfile
+      args:
+        HIVE_VERSION: ${HIVE_VERSION:-3.1.3}
     container_name: hadoop-hiveserver2
     hostname: hiveserver2
+    env_file:
+      - env_file
     ports:
       - "10000:10000"  # HiveServer2 Thrift
       - "10002:10002"  # HiveServer2 Web UI
@@ -91,11 +171,11 @@ services:
     command: ["/opt/scripts/start-hiveserver2.sh"]
 
   spark-history:
-    build:
-      context: ./spark
-      dockerfile: Dockerfile
+    image: hadoop-cluster-spark:latest
     container_name: hadoop-spark-history
     hostname: spark-history
+    env_file:
+      - env_file
     ports:
       - "18080:18080"  # Spark History Server UI
     environment:
@@ -105,6 +185,8 @@ services:
       - ./logs:/mnt/logs
       - ./hive/config/hive-site.xml:/opt/hadoop/etc/hadoop/hive-site.xml:ro
       - ./hive/config/hive-site.xml:/opt/spark/conf/hive-site.xml:ro
+      - ./spark/config/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf:ro
+      - ./spark/config/log4j.properties:/opt/spark/conf/log4j.properties:ro
     depends_on:
       - namenode
       - datanode
@@ -114,8 +196,14 @@ services:
     build:
       context: ./jupyter
       dockerfile: Dockerfile
+      args:
+        SPARK_VERSION: ${SPARK_VERSION:-3.5.2}
+        JUPYTER_VERSION: ${JUPYTER_VERSION:-latest}
+    image: hadoop-cluster-jupyter:latest
     container_name: hadoop-jupyter
     hostname: jupyter
+    env_file:
+      - env_file
     ports:
       - "8888:8888"  # JupyterLab
     environment:
@@ -127,6 +215,8 @@ services:
       - ./logs:/mnt/logs
       - ./hive/config/hive-site.xml:/opt/hadoop/etc/hadoop/hive-site.xml:ro
       - ./hive/config/hive-site.xml:/opt/spark/conf/hive-site.xml:ro
+      - ./spark/config/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf:ro
+      - ./spark/config/log4j.properties:/opt/spark/conf/log4j.properties:ro
     depends_on:
       - namenode
       - datanode
@@ -136,12 +226,17 @@ services:
     build:
       context: ./kyuubi
       dockerfile: Dockerfile
+      args:
+        SPARK_VERSION: ${SPARK_VERSION:-3.5.2}
+        KYUUBI_VERSION: ${KYUUBI_VERSION:-1.8.0}
+    image: hadoop-cluster-kyuubi:latest
     container_name: hadoop-kyuubi
     hostname: kyuubi
     depends_on:
       - namenode
       - datanode
       - spark-history
+      - marquez
     ports:
       - "10009:10009"  # Thrift Binary
     environment:
@@ -152,10 +247,13 @@ services:
       - ./data:/mnt/data
       - ./logs:/mnt/logs
       - ./hive/config/hive-site.xml:/opt/hadoop/etc/hadoop/hive-site.xml:ro
+      - ./spark/config/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf:ro
+      - ./spark/config/log4j.properties:/opt/spark/conf/log4j.properties:ro
     command: ["/opt/scripts/start-kyuubi.sh"]
 
 volumes:
   postgres-data:
+  marquez-data:
   namenode-data:
   namenode-logs:
   datanode-data:

@@ -5,6 +5,7 @@
 - Hive 3.1.3 (Metastore на PostgreSQL 13, HiveServer2)
 - Java 8 (OpenJDK), Python 3.8, Scala 2.13.8
  - Spark 3.5.2, JupyterLab
+ - OpenLineage (Marquez API + Web)
 
 ## План построения
 
@@ -45,6 +46,7 @@ start-cluster.bat clean
 
 # Тестирование
 tests\test-cluster.bat
+tests\test-openlineage.bat
 
 # Остановка
 stop-cluster.bat
@@ -106,7 +108,10 @@ hadoop_cluster/
 ```
 
 ## Переменные окружения
-Все версии компонентов настраиваются в файле `env_file`.
+Все версии компонентов и настройки OpenLineage настраиваются в файле `env_file`.
+Ключевые параметры:
+- `OPENLINEAGE_VERSION=1.21.1`
+- `OPENLINEAGE_NAMESPACE=hadoop-cluster`
 
 ## Веб-интерфейсы
 - HDFS NameNode: `http://localhost:9870`
@@ -116,6 +121,8 @@ hadoop_cluster/
  - Spark History Server: `http://localhost:18080`
  - JupyterLab: `http://localhost:8888`
  - Kyuubi (Thrift Binary): `tcp://localhost:10009`
+ - Marquez API: `http://localhost:5000`
+ - Marquez Web: `http://localhost:3000`
 
 ## Подключение к Hive из DBeaver
 Проверено подключение через DBeaver [[memory:5342975]].
@@ -126,22 +133,28 @@ hadoop_cluster/
 - JDBC URL (пример): `jdbc:hive2://localhost:10000/default`
 
 ## Настройки Hive и HDFS
-- Текущая директория складирования (warehouse) — в HDFS по пути `/opt/hive/warehouse`.
-- Scratch-dir — в HDFS по пути `/opt/hive/tmp`.
-- Значения задаются параметрами при старте `hiveserver2` и могут быть изменены в `hive/scripts/start-hiveserver2.sh`.
+- Директория складирования (warehouse) — в HDFS по пути `/user/hive/warehouse`.
+- Scratch-dir — в HDFS по пути `/tmp/hive`.
+- Значения задаются параметрами при старте `hiveserver2` и в `hive/config/hive-site.xml`.
 
 При необходимости ручной подготовки HDFS директорий:
 ```bash
-docker exec hadoop-namenode hdfs dfs -mkdir -p /opt/hive/warehouse /opt/hive/tmp /tmp /spark-events
+docker exec hadoop-namenode hdfs dfs -mkdir -p /user/hive/warehouse /tmp/hive /tmp /spark-events
 docker exec hadoop-namenode hdfs dfs -chmod 1777 /tmp
-docker exec hadoop-namenode hdfs dfs -chmod 1777 /opt/hive/warehouse
-docker exec hadoop-namenode hdfs dfs -chmod 733  /opt/hive/tmp
+docker exec hadoop-namenode hdfs dfs -chmod 1777 /user/hive/warehouse
+docker exec hadoop-namenode hdfs dfs -chmod 733  /tmp/hive
 ```
 
 ## Тестирование Spark
 ```bash
 tests\test-spark.bat
 ```
+
+## Трассировка данных (OpenLineage/Marquez)
+```bash
+tests\test-openlineage.bat
+```
+Слушатели OpenLineage подключены ко всем Spark-приложениям (Jupyter, Spark History, Kyuubi/SPARK SQL).
 
 ## Kyuubi (Spark SQL over JDBC/Thrift)
 ```bash

@@ -28,8 +28,8 @@ docker exec hadoop-hiveserver2 bash -lc "beeline -u 'jdbc:hive2://kyuubi:10009' 
 
 echo.
 echo 6. Checking HDFS data for kyuubi_table...
-docker exec hadoop-namenode bash -lc "hdfs dfs -ls /opt/hive/warehouse/kyuubi_db.db/kyuubi_table || true"
-docker exec hadoop-namenode bash -lc "f=\$(hdfs dfs -ls -t /opt/hive/warehouse/kyuubi_db.db/kyuubi_table 2>/dev/null | head -1 | awk '{print \$8}'); if [ -n \"\$f\" ]; then hdfs dfs -cat \"\$f\" | head -n 5; else echo 'No data files found'; fi"
+docker exec hadoop-namenode bash -lc "hdfs dfs -ls /user/hive/warehouse/kyuubi_db.db/kyuubi_table || true"
+docker exec hadoop-namenode bash -lc "f=\$(hdfs dfs -ls -t /user/hive/warehouse/kyuubi_db.db/kyuubi_table 2>/dev/null | head -1 | awk '{print \$8}'); if [ -n \"\$f\" ]; then hdfs dfs -cat \"\$f\" | head -n 5; else echo 'No data files found'; fi"
 
 echo.
 echo 7. Checking recent YARN applications (SPARK)...
