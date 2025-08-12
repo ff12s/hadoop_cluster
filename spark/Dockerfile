@@ -3,26 +3,31 @@ FROM hadoop-cluster-base:latest
 # Версии подтягиваются из build-args (compose передаёт из env_file)
 ARG SPARK_VERSION
 ARG OPENLINEAGE_VERSION
+ARG SCALA_VERSION
 
 ENV SPARK_VERSION=${SPARK_VERSION}
 ENV SPARK_HOME=/opt/spark
 ENV PATH=$PATH:$SPARK_HOME/bin:$SPARK_HOME/sbin
 ENV OPENLINEAGE_VERSION=${OPENLINEAGE_VERSION}
 
+
+
 USER root
 
-# Установка Spark (бинарник для Hadoop 3, Scala 2.13)
-RUN aria2c -x 16 -s 16 -d /tmp -o spark-${SPARK_VERSION}-bin-hadoop3-scala2.13.tgz \
-    https://archive.apache.org/dist/spark/spark-${SPARK_VERSION}/spark-${SPARK_VERSION}-bin-hadoop3-scala2.13.tgz && \
-    tar -xzf /tmp/spark-${SPARK_VERSION}-bin-hadoop3-scala2.13.tgz -C /opt && \
-    ln -s /opt/spark-${SPARK_VERSION}-bin-hadoop3-scala2.13 /opt/spark && \
-    rm -f /tmp/spark-${SPARK_VERSION}-bin-hadoop3-scala2.13.tgz && \
+# Установка Spark (бинарник для Hadoop 3, Scala ${SCALA_SHORT_VERSION})
+RUN SCALA_SHORT_VERSION=$(echo ${SCALA_VERSION} | cut -d. -f1,2) && \
+    aria2c -x 16 -s 16 -d /tmp -o spark-${SPARK_VERSION}-bin-hadoop3-scala${SCALA_SHORT_VERSION}.tgz \
+    https://archive.apache.org/dist/spark/spark-${SPARK_VERSION}/spark-${SPARK_VERSION}-bin-hadoop3-scala${SCALA_SHORT_VERSION}.tgz && \
+    tar -xzf /tmp/spark-${SPARK_VERSION}-bin-hadoop3-scala${SCALA_SHORT_VERSION}.tgz -C /opt && \
+    ln -s /opt/spark-${SPARK_VERSION}-bin-hadoop3-scala${SCALA_SHORT_VERSION} /opt/spark && \
+    rm -f /tmp/spark-${SPARK_VERSION}-bin-hadoop3-scala${SCALA_SHORT_VERSION}.tgz && \
     mkdir -p /opt/spark/work /opt/spark/logs && \
     chown -R hadoop:hadoop /opt/spark*
 
-# Добавление OpenLineage Spark Agent (Scala 2.13)
-RUN aria2c -x 16 -s 16 -d /opt/spark/jars -o openlineage-spark_2.13-${OPENLINEAGE_VERSION}.jar \
-    https://repo1.maven.org/maven2/io/openlineage/openlineage-spark_2.13/${OPENLINEAGE_VERSION}/openlineage-spark_2.13-${OPENLINEAGE_VERSION}.jar && \
+# Добавление OpenLineage Spark Agent (Scala ${SCALA_SHORT_VERSION})
+RUN SCALA_SHORT_VERSION=$(echo ${SCALA_VERSION} | cut -d. -f1,2) && \
+    aria2c -x 16 -s 16 -d /opt/spark/jars -o openlineage-spark_${SCALA_SHORT_VERSION}-${OPENLINEAGE_VERSION}.jar \
+    https://repo1.maven.org/maven2/io/openlineage/openlineage-spark_${SCALA_SHORT_VERSION}/${OPENLINEAGE_VERSION}/openlineage-spark_${SCALA_SHORT_VERSION}-${OPENLINEAGE_VERSION}.jar && \
     chown -R hadoop:hadoop /opt/spark/jars
 
 # Конфигурация Spark

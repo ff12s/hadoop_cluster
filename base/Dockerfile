@@ -1,15 +1,19 @@
 FROM ubuntu:20.04
 
 # Установка переменных окружения
-ARG HADOOP_VERSION=3.3.6
-ARG PYTHON_VERSION=3.8
-ARG SCALA_VERSION=2.13.8
+ARG HADOOP_VERSION
+ARG PYTHON_VERSION
+ARG SCALA_VERSION
 
 ENV HADOOP_VERSION=${HADOOP_VERSION}
 ENV PYTHON_VERSION=${PYTHON_VERSION}
 ENV SCALA_VERSION=${SCALA_VERSION}
 
-# Установка Java 8
+# Устанавливаем часовой пояс для автоматической установки
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=UTC
+
+# Установка Java 8 и зависимостей для сборки Python
 RUN apt-get update && apt-get install -y \
     openjdk-8-jdk \
     wget \
@@ -23,14 +27,35 @@ RUN apt-get update && apt-get install -y \
     rsync \
     aria2 \
     netcat \
+    build-essential \
+    zlib1g-dev \
+    libncurses5-dev \
+    libgdbm-dev \
+    libnss3-dev \
+    libssl-dev \
+    libreadline-dev \
+    libffi-dev \
+    libsqlite3-dev \
+    libbz2-dev \
+    tzdata \
+    && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone \
     && rm -rf /var/lib/apt/lists/*
 
-# Установка Python 3.8
-RUN apt-get update && apt-get install -y \
-    python3.8 \
-    python3.8-dev \
-    python3-pip \
-    && rm -rf /var/lib/apt/lists/*
+# Установка Python из исходного кода
+RUN aria2c -x 16 -s 16 -d /tmp -o Python-${PYTHON_VERSION}.tgz \
+    https://www.python.org/ftp/python/${PYTHON_VERSION}/Python-${PYTHON_VERSION}.tgz && \
+    tar -xzf /tmp/Python-${PYTHON_VERSION}.tgz -C /tmp && \
+    cd /tmp/Python-${PYTHON_VERSION} && \
+    ./configure --prefix=/opt/python${PYTHON_VERSION} --enable-optimizations && \
+    make -j$(nproc) && \
+    make altinstall && \
+    ln -s /opt/python${PYTHON_VERSION}/bin/python${PYTHON_VERSION} /usr/local/bin/python${PYTHON_VERSION} && \
+    ln -s /opt/python${PYTHON_VERSION}/bin/pip${PYTHON_VERSION} /usr/local/bin/pip${PYTHON_VERSION} && \
+    ln -s /opt/python${PYTHON_VERSION}/bin/python${PYTHON_VERSION} /usr/local/bin/python3 && \
+    ln -s /opt/python${PYTHON_VERSION}/bin/pip${PYTHON_VERSION} /usr/local/bin/pip3 && \
+    cd / && \
+    rm -rf /tmp/Python-${PYTHON_VERSION} && \
+    rm -f /tmp/Python-${PYTHON_VERSION}.tgz
 
 # Установка Scala
 RUN aria2c -x 16 -s 16 -d /tmp -o scala-${SCALA_VERSION}.tgz \
@@ -74,7 +99,8 @@ ENV HADOOP_CONF_DIR=/opt/hadoop/etc/hadoop
 ENV HADOOP_LOG_DIR=/opt/hadoop/logs
 ENV HADOOP_PID_DIR=/opt/hadoop/tmp
 ENV SCALA_HOME=/opt/scala
-ENV PATH=$PATH:$JAVA_HOME/bin:$HADOOP_HOME/bin:$HADOOP_HOME/sbin:$SCALA_HOME/bin
+ENV PYTHON_HOME=/opt/python${PYTHON_VERSION}
+ENV PATH=$PATH:$JAVA_HOME/bin:$HADOOP_HOME/bin:$HADOOP_HOME/sbin:$SCALA_HOME/bin:$PYTHON_HOME/bin
 
 # Копирование конфигурации Hadoop
 COPY config/ $HADOOP_HOME/etc/hadoop/

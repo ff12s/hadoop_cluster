@@ -1,7 +1,7 @@
 FROM hadoop-cluster-base:latest
 
 # Установка переменных окружения
-ARG HIVE_VERSION=3.1.3
+ARG HIVE_VERSION
 ENV HIVE_VERSION=${HIVE_VERSION}
 ENV HIVE_HOME=/opt/hive
 ENV PATH=$PATH:$HIVE_HOME/bin:$HADOOP_HOME/sbin

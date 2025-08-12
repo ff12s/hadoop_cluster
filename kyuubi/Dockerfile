@@ -30,4 +30,3 @@ USER hadoop
 WORKDIR /home/hadoop
 
 CMD ["/bin/bash"]
-
