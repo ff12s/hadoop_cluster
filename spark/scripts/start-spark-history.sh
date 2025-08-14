@@ -1,9 +1,9 @@
-#!/bin/bash
+﻿#!/bin/bash
 set -euo pipefail
 
 echo "=== Starting Spark History Server ==="
 
-# Ожидаем доступности NameNode перед обращением к HDFS
+# РћР¶РёРґР°РµРј РґРѕСЃС‚СѓРїРЅРѕСЃС‚Рё NameNode РїРµСЂРµРґ РѕР±СЂР°С‰РµРЅРёРµРј Рє HDFS
 echo "Waiting for HDFS (namenode:9000) to become available..."
 for i in {1..60}; do
   if hdfs dfs -ls / >/dev/null 2>&1; then
@@ -13,7 +13,7 @@ for i in {1..60}; do
   echo "HDFS not ready yet... ($i)" && sleep 2
 done
 
-# Подготовка директории событий в HDFS
+# РџРѕРґРіРѕС‚РѕРІРєР° РґРёСЂРµРєС‚РѕСЂРёРё СЃРѕР±С‹С‚РёР№ РІ HDFS
 hdfs dfs -mkdir -p /spark-events || true
 hdfs dfs -chmod 1777 /spark-events || true
 

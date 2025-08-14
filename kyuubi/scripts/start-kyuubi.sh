@@ -1,4 +1,4 @@
-#!/bin/bash
+﻿#!/bin/bash
 set -euo pipefail
 
 echo "=== Starting Apache Kyuubi ==="
@@ -14,7 +14,7 @@ if [ ! -w "$KYUUBI_HOME/pid" ] || [ ! -w "$KYUUBI_HOME/logs" ] || [ ! -w "$KYUUB
   exit 1
 fi
 
-# Запуск Kyuuubi в foreground, чтобы контейнер не завершался
+# Р—Р°РїСѓСЃРє Kyuuubi РІ foreground, С‡С‚РѕР±С‹ РєРѕРЅС‚РµР№РЅРµСЂ РЅРµ Р·Р°РІРµСЂС€Р°Р»СЃСЏ
 exec $KYUUBI_HOME/bin/kyuubi run
 
 

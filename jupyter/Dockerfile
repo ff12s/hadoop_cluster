@@ -11,8 +11,8 @@ ENV PATH=$PATH:$SPARK_HOME/bin:$SPARK_HOME/sbin
 USER root
 
 # Install JupyterLab + Toree
-RUN python3 -m pip install --no-cache-dir --upgrade pip && \
-    bash -lc 'if [ "$JUPYTER_VERSION" = "latest" ]; then pip install --no-cache-dir jupyterlab findspark toree; else pip install --no-cache-dir jupyterlab=="$JUPYTER_VERSION" findspark toree; fi' && \
+RUN pip3 install --no-cache-dir --upgrade pip && \
+    bash -lc 'if [ "$JUPYTER_VERSION" = "latest" ]; then pip3 install --no-cache-dir jupyterlab findspark toree; else pip3 install --no-cache-dir jupyterlab=="$JUPYTER_VERSION" findspark toree; fi' && \
     jupyter toree install --spark_home=/opt/spark --kernel_name="Toree - Scala" --interpreters=Scala
 
 # Prepare directories
@@ -21,7 +21,9 @@ RUN mkdir -p /notebooks /mnt/data /mnt/logs /opt/spark/work /opt/spark/logs && \
 
 # Copy start script
 COPY scripts/ /opt/scripts/
-RUN chmod +x /opt/scripts/* && chown -R hadoop:hadoop /opt/scripts
+# Исправление окончаний строк в скриптах
+RUN find /opt/scripts -name "*.sh" -type f -exec dos2unix {} \; && \
+    chmod +x /opt/scripts/* && chown -R hadoop:hadoop /opt/scripts
 
 USER hadoop
 WORKDIR /home/hadoop

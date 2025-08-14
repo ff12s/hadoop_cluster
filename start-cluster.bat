@@ -9,7 +9,7 @@ if "%1"=="clean" (
 )
 
 echo "Building base image..."
-docker build -t hadoop-cluster-base:latest ./base
+docker-compose --env-file env_file build base
 
 echo "Building cluster images..."
 docker-compose --env-file env_file build spark-image

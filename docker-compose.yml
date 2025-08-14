@@ -1,6 +1,16 @@
-version: '3.8'
+﻿version: '3.8'
 
 services:
+  base:
+    build:
+      context: ./base
+      dockerfile: Dockerfile
+      args:
+        HADOOP_VERSION: ${HADOOP_VERSION}
+        PYTHON_VERSION: ${PYTHON_VERSION}
+        SCALA_VERSION: ${SCALA_VERSION}
+    image: hadoop-cluster-base:latest
+    profiles: ["build"]
   spark-image:
     build:
       context: ./spark
@@ -202,7 +212,6 @@ services:
       args:
         SPARK_VERSION: ${SPARK_VERSION:-3.5.2}
         JUPYTER_VERSION: ${JUPYTER_VERSION:-latest}
-    image: hadoop-cluster-jupyter:latest
     container_name: hadoop-jupyter
     hostname: jupyter
     env_file:
@@ -232,7 +241,6 @@ services:
       args:
         SPARK_VERSION: ${SPARK_VERSION:-3.5.2}
         KYUUBI_VERSION: ${KYUUBI_VERSION:-1.8.0}
-    image: hadoop-cluster-kyuubi:latest
     container_name: hadoop-kyuubi
     hostname: kyuubi
     depends_on:

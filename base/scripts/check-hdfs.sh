@@ -1,41 +1,41 @@
-#!/bin/bash
+﻿#!/bin/bash
 
 echo "=== Checking HDFS Health ==="
 
-# Проверка HDFS (максимум 5 минут)
+# РџСЂРѕРІРµСЂРєР° HDFS (РјР°РєСЃРёРјСѓРј 5 РјРёРЅСѓС‚)
 timeout=300
 interval=15
 elapsed=0
 
 while [ $elapsed -lt $timeout ]; do
-    # Проверка статуса NameNode
+    # РџСЂРѕРІРµСЂРєР° СЃС‚Р°С‚СѓСЃР° NameNode
     if hdfs dfsadmin -safemode get | grep -q "Safe mode is OFF"; then
-        echo "✅ NameNode is out of safe mode"
+        echo "вњ… NameNode is out of safe mode"
         
-        # Проверка живых DataNode
+        # РџСЂРѕРІРµСЂРєР° Р¶РёРІС‹С… DataNode
         live_datanodes=$(hdfs dfsadmin -report -liveDataNodes | grep "Live datanodes" | sed 's/.*Live datanodes (\([0-9]*\)).*/\1/')
         if [ -n "$live_datanodes" ] && [ "$live_datanodes" -gt 0 ] 2>/dev/null; then
-            echo "✅ Found $live_datanodes live DataNode(s)"
+            echo "вњ… Found $live_datanodes live DataNode(s)"
             
-            # Проверка доступности HDFS
+            # РџСЂРѕРІРµСЂРєР° РґРѕСЃС‚СѓРїРЅРѕСЃС‚Рё HDFS
             if hdfs dfs -test -d /; then
-                echo "✅ HDFS root directory is accessible"
-                echo "✅ HDFS Health Check: PASSED"
+                echo "вњ… HDFS root directory is accessible"
+                echo "вњ… HDFS Health Check: PASSED"
                 exit 0
             else
-                echo "⏳ Cannot access HDFS root directory, waiting... ($elapsed/$timeout seconds)"
+                echo "вЏі Cannot access HDFS root directory, waiting... ($elapsed/$timeout seconds)"
             fi
         else
-            echo "⏳ No live DataNodes found, waiting... ($elapsed/$timeout seconds)"
+            echo "вЏі No live DataNodes found, waiting... ($elapsed/$timeout seconds)"
         fi
     else
-        echo "⏳ NameNode is still in safe mode, waiting... ($elapsed/$timeout seconds)"
+        echo "вЏі NameNode is still in safe mode, waiting... ($elapsed/$timeout seconds)"
     fi
     
     sleep $interval
     elapsed=$((elapsed + interval))
 done
 
-echo "❌ HDFS failed to start within $timeout seconds"
-echo "❌ HDFS Health Check: FAILED"
+echo "вќЊ HDFS failed to start within $timeout seconds"
+echo "вќЊ HDFS Health Check: FAILED"
 exit 1

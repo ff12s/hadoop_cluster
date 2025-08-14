@@ -38,6 +38,7 @@ RUN apt-get update && apt-get install -y \
     libsqlite3-dev \
     libbz2-dev \
     tzdata \
+    dos2unix \
     && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone \
     && rm -rf /var/lib/apt/lists/*
 
@@ -48,7 +49,7 @@ RUN aria2c -x 16 -s 16 -d /tmp -o Python-${PYTHON_VERSION}.tgz \
     cd /tmp/Python-${PYTHON_VERSION} && \
     ./configure --prefix=/opt/python${PYTHON_VERSION} --enable-optimizations && \
     make -j$(nproc) && \
-    make altinstall && \
+    make install && \
     ln -s /opt/python${PYTHON_VERSION}/bin/python${PYTHON_VERSION} /usr/local/bin/python${PYTHON_VERSION} && \
     ln -s /opt/python${PYTHON_VERSION}/bin/pip${PYTHON_VERSION} /usr/local/bin/pip${PYTHON_VERSION} && \
     ln -s /opt/python${PYTHON_VERSION}/bin/python${PYTHON_VERSION} /usr/local/bin/python3 && \
@@ -104,10 +105,14 @@ ENV PATH=$PATH:$JAVA_HOME/bin:$HADOOP_HOME/bin:$HADOOP_HOME/sbin:$SCALA_HOME/bin
 
 # Копирование конфигурации Hadoop
 COPY config/ $HADOOP_HOME/etc/hadoop/
+# Исправление окончаний строк в конфигурационных файлах
+RUN find $HADOOP_HOME/etc/hadoop -name "*.xml" -o -name "*.sh" -o -name "*.properties" | xargs dos2unix
 
 # Копирование скриптов
 COPY scripts/ /opt/scripts/
-RUN chmod +x /opt/scripts/* && chown -R hadoop:hadoop /opt/scripts
+# Исправление окончаний строк в скриптах
+RUN find /opt/scripts -name "*.sh" -type f -exec dos2unix {} \; && \
+    chmod +x /opt/scripts/* && chown -R hadoop:hadoop /opt/scripts
 
 USER hadoop
 WORKDIR /home/hadoop

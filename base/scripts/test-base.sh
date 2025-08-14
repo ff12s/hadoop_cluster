@@ -1,68 +1,68 @@
-#!/bin/bash
+﻿#!/bin/bash
 
-echo "=== Тестирование базового образа ==="
+echo "=== РўРµСЃС‚РёСЂРѕРІР°РЅРёРµ Р±Р°Р·РѕРІРѕРіРѕ РѕР±СЂР°Р·Р° ==="
 
-# Проверка Java
-echo "1. Проверка Java:"
+# РџСЂРѕРІРµСЂРєР° Java
+echo "1. РџСЂРѕРІРµСЂРєР° Java:"
 java -version
 if [ $? -eq 0 ]; then
-    echo "✅ Java установлен корректно"
+    echo "вњ… Java СѓСЃС‚Р°РЅРѕРІР»РµРЅ РєРѕСЂСЂРµРєС‚РЅРѕ"
 else
-    echo "❌ Ошибка с Java"
+    echo "вќЊ РћС€РёР±РєР° СЃ Java"
     exit 1
 fi
 
-# Проверка Python
-echo -e "\n2. Проверка Python:"
+# РџСЂРѕРІРµСЂРєР° Python
+echo -e "\n2. РџСЂРѕРІРµСЂРєР° Python:"
 python3 --version
 if [ $? -eq 0 ]; then
-    echo "✅ Python установлен корректно"
+    echo "вњ… Python СѓСЃС‚Р°РЅРѕРІР»РµРЅ РєРѕСЂСЂРµРєС‚РЅРѕ"
 else
-    echo "❌ Ошибка с Python"
+    echo "вќЊ РћС€РёР±РєР° СЃ Python"
     exit 1
 fi
 
-# Проверка Scala
-echo -e "\n3. Проверка Scala:"
+# РџСЂРѕРІРµСЂРєР° Scala
+echo -e "\n3. РџСЂРѕРІРµСЂРєР° Scala:"
 scala -version
 if [ $? -eq 0 ]; then
-    echo "✅ Scala установлен корректно"
+    echo "вњ… Scala СѓСЃС‚Р°РЅРѕРІР»РµРЅ РєРѕСЂСЂРµРєС‚РЅРѕ"
 else
-    echo "❌ Ошибка с Scala"
+    echo "вќЊ РћС€РёР±РєР° СЃ Scala"
     exit 1
 fi
 
-# Проверка SSH
-echo -e "\n4. Проверка SSH:"
+# РџСЂРѕРІРµСЂРєР° SSH
+echo -e "\n4. РџСЂРѕРІРµСЂРєР° SSH:"
 if [ -f /home/hadoop/.ssh/id_rsa ]; then
-    echo "✅ SSH ключи настроены"
+    echo "вњ… SSH РєР»СЋС‡Рё РЅР°СЃС‚СЂРѕРµРЅС‹"
 else
-    echo "❌ SSH ключи не найдены"
+    echo "вќЊ SSH РєР»СЋС‡Рё РЅРµ РЅР°Р№РґРµРЅС‹"
     exit 1
 fi
 
-# Проверка директорий
-echo -e "\n5. Проверка директорий:"
+# РџСЂРѕРІРµСЂРєР° РґРёСЂРµРєС‚РѕСЂРёР№
+echo -e "\n5. РџСЂРѕРІРµСЂРєР° РґРёСЂРµРєС‚РѕСЂРёР№:"
 directories=("/opt/hadoop" "/opt/hive" "/opt/spark" "/opt/kyubi" "/opt/jupyter" "/mnt/data" "/mnt/logs")
 for dir in "${directories[@]}"; do
     if [ -d "$dir" ]; then
-        echo "✅ $dir существует"
+        echo "вњ… $dir СЃСѓС‰РµСЃС‚РІСѓРµС‚"
     else
-        echo "❌ $dir не найден"
+        echo "вќЊ $dir РЅРµ РЅР°Р№РґРµРЅ"
         exit 1
     fi
 done
 
-# Проверка переменных окружения
-echo -e "\n6. Проверка переменных окружения:"
+# РџСЂРѕРІРµСЂРєР° РїРµСЂРµРјРµРЅРЅС‹С… РѕРєСЂСѓР¶РµРЅРёСЏ
+echo -e "\n6. РџСЂРѕРІРµСЂРєР° РїРµСЂРµРјРµРЅРЅС‹С… РѕРєСЂСѓР¶РµРЅРёСЏ:"
 env_vars=("JAVA_HOME" "SCALA_HOME" "HADOOP_HOME" "HIVE_HOME" "SPARK_HOME" "KYUBI_HOME" "JUPYTER_HOME")
 for var in "${env_vars[@]}"; do
     if [ -n "${!var}" ]; then
-        echo "✅ $var=${!var}"
+        echo "вњ… $var=${!var}"
     else
-        echo "❌ $var не установлена"
+        echo "вќЊ $var РЅРµ СѓСЃС‚Р°РЅРѕРІР»РµРЅР°"
         exit 1
     fi
 done
 
-echo -e "\n🎉 Базовый образ готов к работе!"
+echo -e "\nрџЋ‰ Р‘Р°Р·РѕРІС‹Р№ РѕР±СЂР°Р· РіРѕС‚РѕРІ Рє СЂР°Р±РѕС‚Рµ!"

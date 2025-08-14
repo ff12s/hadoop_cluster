@@ -32,10 +32,14 @@ RUN SCALA_SHORT_VERSION=$(echo ${SCALA_VERSION} | cut -d. -f1,2) && \
 
 # Конфигурация Spark
 COPY config/ /opt/spark/conf/
+# Исправление окончаний строк в конфигурационных файлах
+RUN find /opt/spark/conf -name "*.xml" -o -name "*.sh" -o -name "*.properties" -o -name "*.conf" | xargs dos2unix
 
 # Скрипты запуска
 COPY scripts/ /opt/scripts/
-RUN chmod +x /opt/scripts/* && chown -R hadoop:hadoop /opt/scripts
+# Исправление окончаний строк в скриптах
+RUN find /opt/scripts -name "*.sh" -type f -exec dos2unix {} \; && \
+    chmod +x /opt/scripts/* && chown -R hadoop:hadoop /opt/scripts
 
 USER hadoop
 WORKDIR /home/hadoop

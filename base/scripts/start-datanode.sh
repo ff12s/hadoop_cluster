@@ -1,26 +1,26 @@
-#!/bin/bash
+﻿#!/bin/bash
 
 echo "Starting DataNode..."
 
-# Ожидание запуска NameNode
+# РћР¶РёРґР°РЅРёРµ Р·Р°РїСѓСЃРєР° NameNode
 echo "Waiting for NameNode to start..."
 sleep 10
 
-# Запуск HDFS DataNode
+# Р—Р°РїСѓСЃРє HDFS DataNode
 echo "Starting HDFS DataNode..."
 hdfs datanode &
 
-# Ожидание запуска DataNode
+# РћР¶РёРґР°РЅРёРµ Р·Р°РїСѓСЃРєР° DataNode
 sleep 10
 
-# Запуск YARN NodeManager
+# Р—Р°РїСѓСЃРє YARN NodeManager
 echo "Starting YARN NodeManager..."
 yarn nodemanager &
 
-# Ожидание запуска NodeManager
+# РћР¶РёРґР°РЅРёРµ Р·Р°РїСѓСЃРєР° NodeManager
 sleep 10
 
 echo "DataNode and NodeManager started successfully"
 
-# Держим контейнер запущенным
+# Р”РµСЂР¶РёРј РєРѕРЅС‚РµР№РЅРµСЂ Р·Р°РїСѓС‰РµРЅРЅС‹Рј
 tail -f /dev/null

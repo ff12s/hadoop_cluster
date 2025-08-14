@@ -34,10 +34,14 @@ RUN mkdir -p /opt/hive/warehouse && \
 
 # Копирование конфигурационных файлов Hive
 COPY config/ $HIVE_HOME/conf/
+# Исправление окончаний строк в конфигурационных файлах
+RUN find $HIVE_HOME/conf -name "*.xml" -o -name "*.sh" -o -name "*.properties" | xargs dos2unix
 
 # Копирование скриптов
 COPY scripts/ /opt/scripts/
-RUN chmod +x /opt/scripts/* && chown -R hadoop:hadoop /opt/scripts
+# Исправление окончаний строк в скриптах
+RUN find /opt/scripts -name "*.sh" -type f -exec dos2unix {} \; && \
+    chmod +x /opt/scripts/* && chown -R hadoop:hadoop /opt/scripts
 
 USER hadoop
 WORKDIR /home/hadoop

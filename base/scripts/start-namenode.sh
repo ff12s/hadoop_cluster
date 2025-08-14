@@ -1,28 +1,28 @@
-#!/bin/bash
+﻿#!/bin/bash
 
 echo "Starting NameNode..."
 
-# Форматирование NameNode (если не отформатирован)
+# Р¤РѕСЂРјР°С‚РёСЂРѕРІР°РЅРёРµ NameNode (РµСЃР»Рё РЅРµ РѕС‚С„РѕСЂРјР°С‚РёСЂРѕРІР°РЅ)
 if [ ! -f /opt/hadoop/dfs/name/current/VERSION ]; then
     echo "Formatting NameNode..."
     hdfs namenode -format
 fi
 
-# Запуск HDFS NameNode
+# Р—Р°РїСѓСЃРє HDFS NameNode
 echo "Starting HDFS NameNode..."
 hdfs namenode &
 
-# Ожидание запуска NameNode
+# РћР¶РёРґР°РЅРёРµ Р·Р°РїСѓСЃРєР° NameNode
 sleep 10
 
-# Запуск YARN ResourceManager
+# Р—Р°РїСѓСЃРє YARN ResourceManager
 echo "Starting YARN ResourceManager..."
 yarn resourcemanager &
 
-# Ожидание запуска ResourceManager
+# РћР¶РёРґР°РЅРёРµ Р·Р°РїСѓСЃРєР° ResourceManager
 sleep 10
 
 echo "NameNode and ResourceManager started successfully"
 
-# Держим контейнер запущенным
+# Р”РµСЂР¶РёРј РєРѕРЅС‚РµР№РЅРµСЂ Р·Р°РїСѓС‰РµРЅРЅС‹Рј
 tail -f /dev/null

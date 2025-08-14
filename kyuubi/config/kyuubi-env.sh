@@ -1,4 +1,4 @@
-# Kyuuubi environment
+﻿# Kyuuubi environment
 export JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64
 export KYUUBI_HOME=/opt/kyuubi
 export KYUUBI_CONF_DIR=/opt/kyuubi/conf

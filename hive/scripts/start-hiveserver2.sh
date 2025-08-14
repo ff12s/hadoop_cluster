@@ -1,8 +1,8 @@
-#!/bin/bash
+﻿#!/bin/bash
 
 echo "=== Starting HiveServer2 ==="
 
-# Ожидание готовности Hive Metastore
+# РћР¶РёРґР°РЅРёРµ РіРѕС‚РѕРІРЅРѕСЃС‚Рё Hive Metastore
 echo "Waiting for Hive Metastore to be ready..."
 until nc -z hive-metastore 9083; do
     echo "Metastore not ready, waiting..."
@@ -11,7 +11,7 @@ done
 
 echo "Hive Metastore is ready!"
 
-# Запуск HiveServer2 как PID 1, биндимся на 0.0.0.0
+# Р—Р°РїСѓСЃРє HiveServer2 РєР°Рє PID 1, Р±РёРЅРґРёРјСЃСЏ РЅР° 0.0.0.0
 echo "Starting HiveServer2..."
 export HADOOP_CLASSPATH=$HADOOP_CONF_DIR:$HADOOP_CLASSPATH:$HIVE_HOME/lib/*
 export HIVE_LOG_DIR=/opt/hive/logs

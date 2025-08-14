@@ -1,9 +1,9 @@
-#!/bin/bash
+﻿#!/bin/bash
 set -euo pipefail
 
 echo "=== Starting Hive Metastore ==="
 
-# Ожидание готовности PostgreSQL
+# РћР¶РёРґР°РЅРёРµ РіРѕС‚РѕРІРЅРѕСЃС‚Рё PostgreSQL
 echo "Waiting for PostgreSQL to be ready..."
 until nc -z postgres 5432; do
     echo "PostgreSQL not ready, waiting..."
@@ -12,7 +12,7 @@ done
 
 echo "PostgreSQL is ready!"
 
-# Инициализация/обновление схемы метастора
+# РРЅРёС†РёР°Р»РёР·Р°С†РёСЏ/РѕР±РЅРѕРІР»РµРЅРёРµ СЃС…РµРјС‹ РјРµС‚Р°СЃС‚РѕСЂР°
 echo "Initializing/Upgrading Hive Metastore schema..."
 if schematool -dbType postgres -info >/dev/null 2>&1; then
   echo "Metastore schema exists. Upgrading if needed..."
@@ -22,15 +22,15 @@ else
   schematool -dbType postgres -initSchema
 fi
 
-# Запуск Hive Metastore
+# Р—Р°РїСѓСЃРє Hive Metastore
 echo "Starting Hive Metastore..."
 export HADOOP_CLASSPATH=$HADOOP_CONF_DIR:$HADOOP_CLASSPATH:$HIVE_HOME/lib/*
 $HIVE_HOME/bin/hive --service metastore &
 
-# Ожидание запуска
+# РћР¶РёРґР°РЅРёРµ Р·Р°РїСѓСЃРєР°
 sleep 10
 
-# Проверка статуса
+# РџСЂРѕРІРµСЂРєР° СЃС‚Р°С‚СѓСЃР°
 echo "Checking Metastore status..."
 if jps | grep -iq metastore; then
   echo "Hive Metastore started on port 9083"
@@ -51,5 +51,5 @@ else
   fi
 fi
 
-# Держим контейнер запущенным
+# Р”РµСЂР¶РёРј РєРѕРЅС‚РµР№РЅРµСЂ Р·Р°РїСѓС‰РµРЅРЅС‹Рј
 tail -f /dev/null

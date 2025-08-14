@@ -23,8 +23,13 @@ RUN aria2c -x 16 -s 16 -d /tmp -o apache-kyuubi-${KYUUBI_VERSION}-bin.tgz \
 
 # Copy config and scripts
 COPY config/ /opt/kyuubi/conf/
+# Исправление окончаний строк в конфигурационных файлах
+RUN find /opt/kyuubi/conf -name "*.xml" -o -name "*.sh" -o -name "*.properties" -o -name "*.conf" | xargs dos2unix
+
 COPY scripts/ /opt/scripts/
-RUN chmod +x /opt/scripts/* && chown -R hadoop:hadoop /opt/scripts
+# Исправление окончаний строк в скриптах
+RUN find /opt/scripts -name "*.sh" -type f -exec dos2unix {} \; && \
+    chmod +x /opt/scripts/* && chown -R hadoop:hadoop /opt/scripts
 
 USER hadoop
 WORKDIR /home/hadoop
