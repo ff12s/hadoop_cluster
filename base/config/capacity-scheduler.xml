@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
+<configuration>
+    <!-- Глобальный максимум доли ресурсов кластера для ApplicationMaster -->
+    <property>
+        <name>yarn.scheduler.capacity.maximum-am-resource-percent</name>
+        <value>0.5</value>
+    </property>
+
+    <!-- Определение очереди root.default -->
+    <property>
+        <name>yarn.scheduler.capacity.root.queues</name>
+        <value>default</value>
+    </property>
+    <property>
+        <name>yarn.scheduler.capacity.root.default.capacity</name>
+        <value>100</value>
+    </property>
+    <property>
+        <name>yarn.scheduler.capacity.root.default.maximum-capacity</name>
+        <value>100</value>
+    </property>
+    <property>
+        <name>yarn.scheduler.capacity.root.default.user-limit-factor</name>
+        <value>2</value>
+    </property>
+    <!-- Пер-очередной максимум для AM, чтобы гарантировать несколько одновременных приложений -->
+    <property>
+        <name>yarn.scheduler.capacity.root.default.maximum-am-resource-percent</name>
+        <value>0.5</value>
+    </property>
+</configuration>
+
+
