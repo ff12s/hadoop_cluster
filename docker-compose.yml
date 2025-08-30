@@ -109,8 +109,6 @@ services:
       - "9870:9870"  # HDFS Web UI
       - "8088:8088"  # YARN Web UI
     volumes:
-      - ./data:/mnt/data
-      - ./logs:/mnt/logs
       - namenode-data:/opt/hadoop/dfs/name
       - namenode-logs:/opt/hadoop/logs
       - ./hive/config/hive-site.xml:/opt/hadoop/etc/hadoop/hive-site.xml:ro
@@ -131,8 +129,6 @@ services:
       - "9864:9864"  # DataNode Web UI
       - "8042:8042"  # YARN Web UI
     volumes:
-      - ./data:/mnt/data
-      - ./logs:/mnt/logs
       - datanode-data:/opt/hadoop/dfs/data
       - datanode-logs:/opt/hadoop/logs
       - ./hive/config/hive-site.xml:/opt/hadoop/etc/hadoop/hive-site.xml:ro
@@ -154,8 +150,6 @@ services:
     ports:
       - "9083:9083"  # Hive Metastore
     volumes:
-      - ./data:/mnt/data
-      - ./logs:/mnt/logs
       - hive-warehouse:/opt/hive/warehouse
       - hive-logs:/opt/hive/logs
     environment:
@@ -177,8 +171,6 @@ services:
       - "10000:10000"  # HiveServer2 Thrift
       - "10002:10002"  # HiveServer2 Web UI
     volumes:
-      - ./data:/mnt/data
-      - ./logs:/mnt/logs
       - hive-warehouse:/opt/hive/warehouse
       - hive-logs:/opt/hive/logs
     environment:
@@ -197,8 +189,6 @@ services:
       <<: *versions
       HADOOP_CONF_DIR: /opt/hadoop/etc/hadoop
     volumes:
-      - ./data:/mnt/data
-      - ./logs:/mnt/logs
       - ./hive/config/hive-site.xml:/opt/hadoop/etc/hadoop/hive-site.xml:ro
       - ./hive/config/hive-site.xml:/opt/spark/conf/hive-site.xml:ro
       - ./spark/config/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf:ro
@@ -223,8 +213,6 @@ services:
       HADOOP_CONF_DIR: /opt/hadoop/etc/hadoop
     volumes:
       - ./jupyter/notebooks:/notebooks
-      - ./data:/mnt/data
-      - ./logs:/mnt/logs
       - ./hive/config/hive-site.xml:/opt/hadoop/etc/hadoop/hive-site.xml:ro
       - ./hive/config/hive-site.xml:/opt/spark/conf/hive-site.xml:ro
       - ./spark/config/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf:ro
@@ -253,8 +241,6 @@ services:
       <<: *versions
       HADOOP_CONF_DIR: /opt/hadoop/etc/hadoop
     volumes:
-      - ./data:/mnt/data
-      - ./logs:/mnt/logs
       - ./hive/config/hive-site.xml:/opt/hadoop/etc/hadoop/hive-site.xml:ro
       - ./spark/config/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf:ro
       - ./spark/config/log4j.properties:/opt/spark/conf/log4j.properties:ro
