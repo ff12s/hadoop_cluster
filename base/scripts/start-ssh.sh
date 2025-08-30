@@ -1,13 +1,13 @@
 ﻿#!/bin/bash
 
-# Р—Р°РїСѓСЃРє SSH СЃРµСЂРІРёСЃР°
+# Start SSH service
 sudo service ssh start
 
-# РћР¶РёРґР°РЅРёРµ Р·Р°РїСѓСЃРєР° SSH
+# Wait for SSH startup
 sleep 2
 
-echo "SSH СЃРµСЂРІРёСЃ Р·Р°РїСѓС‰РµРЅ"
-echo "SSH РєР»СЋС‡Рё РЅР°СЃС‚СЂРѕРµРЅС‹ РґР»СЏ РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ hadoop"
+echo "SSH service started"
+echo "SSH keys configured for user hadoop"
 
-# Р”РµСЂР¶РёРј РєРѕРЅС‚РµР№РЅРµСЂ Р·Р°РїСѓС‰РµРЅРЅС‹Рј
+# Keep container running
 tail -f /dev/null

@@ -9,14 +9,16 @@ if "%1"=="clean" (
 )
 
 echo "Building base image..."
-docker-compose --env-file env_file build base
+docker-compose build base
+
+echo "Building spark image..."
+docker-compose build spark-image
 
 echo "Building cluster images..."
-docker-compose --env-file env_file build spark-image
-docker-compose --env-file env_file build
+docker-compose build
 
 echo "Starting cluster..."
-docker-compose --env-file env_file up -d
+docker-compose up -d
 
 echo "Checking HDFS health..."
 docker exec hadoop-namenode /opt/scripts/check-hdfs.sh

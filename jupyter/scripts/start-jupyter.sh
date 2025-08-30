@@ -4,7 +4,8 @@ set -euo pipefail
 echo "=== Starting JupyterLab ==="
 
 # Allow from any host (containerized)
-export PYSPARK_PYTHON=python3
+# Use version-agnostic absolute path
+export PYSPARK_PYTHON=/opt/python/bin/python3
 export PYSPARK_DRIVER_PYTHON=jupyter
 export PYSPARK_DRIVER_PYTHON_OPTS="lab --ip=0.0.0.0 --port=8888 --no-browser --ServerApp.token='' --ServerApp.password='' --notebook-dir=/notebooks"
 

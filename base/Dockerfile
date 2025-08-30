@@ -54,6 +54,7 @@ RUN aria2c -x 16 -s 16 -d /tmp -o Python-${PYTHON_VERSION}.tgz \
     ln -s /opt/python${PYTHON_VERSION}/bin/pip${PYTHON_VERSION} /usr/local/bin/pip${PYTHON_VERSION} && \
     ln -s /opt/python${PYTHON_VERSION}/bin/python${PYTHON_VERSION} /usr/local/bin/python3 && \
     ln -s /opt/python${PYTHON_VERSION}/bin/pip${PYTHON_VERSION} /usr/local/bin/pip3 && \
+    ln -s /opt/python${PYTHON_VERSION} /opt/python && \
     cd / && \
     rm -rf /tmp/Python-${PYTHON_VERSION} && \
     rm -f /tmp/Python-${PYTHON_VERSION}.tgz
@@ -101,7 +102,7 @@ ENV HADOOP_LOG_DIR=/opt/hadoop/logs
 ENV HADOOP_PID_DIR=/opt/hadoop/tmp
 ENV SCALA_HOME=/opt/scala
 ENV PYTHON_HOME=/opt/python${PYTHON_VERSION}
-ENV PATH=$PATH:$JAVA_HOME/bin:$HADOOP_HOME/bin:$HADOOP_HOME/sbin:$SCALA_HOME/bin:$PYTHON_HOME/bin
+ENV PATH=$JAVA_HOME/bin:$HADOOP_HOME/bin:$HADOOP_HOME/sbin:$SCALA_HOME/bin:$PYTHON_HOME/bin:$PATH
 
 # Копирование конфигурации Hadoop
 COPY config/ $HADOOP_HOME/etc/hadoop/

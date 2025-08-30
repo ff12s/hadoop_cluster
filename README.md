@@ -1,202 +1,295 @@
 # Hadoop Cluster для тестирования
 
-Тестовый кластер с компонентами:
-- Hadoop 3.3.6 (HDFS, YARN)
-- Hive 3.1.3 (Metastore на PostgreSQL 13, HiveServer2)
-- Java 8 (OpenJDK), Python 3.8, Scala 2.13.8
- - Spark 3.5.2, JupyterLab
- - OpenLineage (Marquez API + Web)
+Тестовый кластер Hadoop с полным стеком технологий для разработки и тестирования Big Data приложений.
 
-## План построения
+## 🚀 Компоненты кластера
 
-### Этап 1: Базовый образ ✅
-- [x] Java 1.8
-- [x] Python 3.8
-- [x] Scala 2.13
-- [x] SSH настройка
-- [x] Базовые директории
+- **Hadoop 3.3.6** - HDFS, YARN, MapReduce
+- **Hive 3.1.3** - Data Warehouse с PostgreSQL 13
+- **Spark 3.5.2** - Обработка данных и машинное обучение
+- **JupyterLab** - Интерактивная разработка с PySpark и Scala
+- **Kyuubi 1.10.2** - Spark SQL через JDBC/Thrift
+- **OpenLineage** - Трассировка данных (Marquez)
+- **Java 8**, **Python 3.12**, **Scala 2.13.8**
 
-### Этап 2: Hadoop + HDFS 🔄
-- [x] Hadoop Core (сборка)
-- [x] HDFS NameNode (конфигурация)
-- [x] HDFS DataNode (конфигурация)
-- [x] Тестирование HDFS
+## 📋 Быстрый старт
 
-### Этап 3: YARN
-- [x] ResourceManager
-- [x] NodeManager
-- [x] Тестирование YARN
-
-### Этап 4: Hive
-- [x] Hive Metastore (PostgreSQL)
-- [x] HiveServer2
-- [x] Тестирование Hive
-
-### Дальше (при необходимости)
-- [x] Spark (Spark History Server, тест SparkPi и PySpark на YARN)
-- [x] JupyterLab (PySpark на YARN, каталог `/notebooks`)
-- [x] Kyuubi (Thrift Binary 10009, Spark SQL engine на YARN)
-
-## Запуск
-
-### Быстрый старт
+### Запуск кластера
 ```bash
-# Чистый запуск с пересборкой образов
-start-cluster.bat clean
-
-# Тестирование
-tests\test-cluster.bat
-tests\test-openlineage.bat
+# Полный запуск с пересборкой образов
+start-cluster.bat
 
 # Остановка
-stop-cluster.bat
+docker compose stop
 ```
 
-### Пошаговое тестирование
-```bash
-# Тестирование HDFS
-tests\test-hdfs.bat
+## 🌐 Веб-интерфейсы
 
-# Тестирование YARN
-tests\test-yarn.bat
+| Сервис | URL | Описание |
+|--------|-----|----------|
+| HDFS NameNode | http://localhost:9870 | Управление файловой системой |
+| YARN ResourceManager | http://localhost:8088 | Управление ресурсами |
+| Spark History Server | http://localhost:18080 | История Spark приложений |
+| JupyterLab | http://localhost:8888 | Интерактивная разработка |
+| HiveServer2 Web UI | http://localhost:10002 | Веб-интерфейс Hive |
+| Marquez Web | http://localhost:3000 | Трассировка данных |
+| Marquez API | http://localhost:5000 | API для трассировки |
 
-# Полное тестирование
-tests\test-cluster.bat
+## 📁 Структура проекта
 
-# Тестирование Spark отдельно
-tests\test-spark.bat
-```
-
-### Ручное управление
-```bash
-# Сборка базового образа
-docker build -t hadoop-cluster-base:latest ./base
-
-# Сборка Hadoop образов
-docker-compose build namenode datanode
-
-# Запуск сервисов
-docker-compose up -d
-
-# Остановка
-docker-compose down
-```
-
-## Структура проекта
 ```
 hadoop_cluster/
-├── base/                    # Базовый образ Hadoop (HDFS + YARN)
-│   ├── Dockerfile
-│   ├── config/              # Конфиги Hadoop: core-site, hdfs-site, yarn-site, mapred-site, hadoop-env
-│   └── scripts/             # Скрипты запуска NN/DN/SSH
-├── hive/                    # Образы Hive (metastore, hiveserver2)
-│   ├── Dockerfile
+├── base/                    # Базовый образ Hadoop
+│   ├── config/              # Конфиги: core-site, hdfs-site, yarn-site, mapred-site
+│   ├── scripts/             # Скрипты запуска и проверки
+│   └── Dockerfile
+├── hive/                    # Hive (Metastore + HiveServer2)
 │   ├── config/              # hive-site.xml
-│   └── scripts/             # start-metastore.sh, start-hiveserver2.sh
+│   ├── scripts/             # Скрипты запуска
+│   └── Dockerfile
+├── spark/                   # Spark с History Server
+│   ├── config/              # spark-defaults.conf, log4j.properties
+│   ├── scripts/             # Скрипты запуска и тестирования
+│   └── Dockerfile
+├── jupyter/                 # JupyterLab
+│   ├── notebooks/           # Jupyter ноутбуки
+│   ├── scripts/             # Скрипты запуска
+│   └── Dockerfile
+├── kyuubi/                  # Kyuubi (Spark SQL)
+│   ├── config/              # kyuubi-defaults.conf
+│   ├── scripts/             # Скрипты запуска
+│   └── Dockerfile
+├── marquez/                 # OpenLineage
+│   └── config/              # config.yml
 ├── tests/                   # Тестовые скрипты
-│   ├── test-hdfs.bat        # Тест HDFS
-│   ├── test-yarn.bat        # Тест YARN
-│   ├── test-cluster.bat     # Полный тест
-│   └── README.md
-├── data/                    # Данные
-├── logs/                    # Логи
-├── start-cluster.bat        # Запуск кластера
-├── stop-cluster.bat         # Остановка кластера
-├── docker-compose.yml
-├── env_file
+├── docker-compose.yml       # Конфигурация кластера
+├── .env                     # Переменные окружения
 └── README.md
 ```
 
-## Переменные окружения
-Все версии компонентов и настройки OpenLineage настраиваются в файле `env_file`.
-Ключевые параметры:
-- `OPENLINEAGE_VERSION=1.21.1`
-- `OPENLINEAGE_NAMESPACE=hadoop-cluster`
+## ⚙️ Конфигурация
 
-## Веб-интерфейсы
-- HDFS NameNode: `http://localhost:9870`
-- YARN ResourceManager: `http://localhost:8088`
-- HiveServer2 Web UI: `http://localhost:10002`
-- Hive Metastore (Thrift): `tcp://localhost:9083`
- - Spark History Server: `http://localhost:18080`
- - JupyterLab: `http://localhost:8888`
- - Kyuubi (Thrift Binary): `tcp://localhost:10009`
- - Marquez API: `http://localhost:5000`
- - Marquez Web: `http://localhost:3000`
+### Переменные окружения (.env)
 
-## Подключение к Hive из DBeaver
-Проверено подключение через DBeaver [[memory:5342975]].
-- Драйвер: Apache Hive 3.1+
-- Host: `localhost`, Port: `10000`
-- User: `hadoop`, Password: пусто
-- Database: `default` или `test_db`
-- JDBC URL (пример): `jdbc:hive2://localhost:10000/default`
+#### Версии компонентов
+- `HADOOP_VERSION=3.3.6` - Apache Hadoop
+- `HIVE_VERSION=3.1.3` - Apache Hive
+- `SPARK_VERSION=3.5.2` - Apache Spark
+- `SCALA_VERSION=2.13.8` - Scala
+- `PYTHON_VERSION=3.12.7` - Python
+- `KYUUBI_VERSION=1.10.2` - Apache Kyuubi
+- `JUPYTER_VERSION=latest` - JupyterLab
+- `JAVA_VERSION=8` - Java (OpenJDK)
 
-## Настройки Hive и HDFS
-- Директория складирования (warehouse) — в HDFS по пути `/user/hive/warehouse`.
-- Scratch-dir — в HDFS по пути `/tmp/hive`.
-- Значения задаются параметрами при старте `hiveserver2` и в `hive/config/hive-site.xml`.
+#### OpenLineage
+- `OPENLINEAGE_VERSION=1.37.0` - Версия OpenLineage
+- `OPENLINEAGE_NAMESPACE=hadoop-cluster` - Пространство имен
 
-При необходимости ручной подготовки HDFS директорий:
+
+## 🔌 Подключения
+
+### Hive через DBeaver
+- **Драйвер**: Apache Hive 3.1+
+- **Host**: `localhost`
+- **Port**: `10000`
+- **User**: `hadoop`
+- **Password**: (пусто)
+- **Database**: `default`
+- **JDBC URL**: `jdbc:hive2://localhost:10000/default`
+
+> **Примечание**: Hive использует MapReduce движок, который медленнее Spark. Для лучшей производительности рекомендуется использовать **Kyuubi** (порт 10009), который работает на Spark SQL.
+
+### Kyuubi через DBeaver
+- **Драйвер**: Apache kyuubi Hive 3.1+
+- **Host**: `localhost`
+- **Port**: `10009`
+- **User**: `hadoop`
+- **Password**: (пусто)
+- **Database**: `default`
+- **JDBC URL**: `jdbc:hive2://localhost:10009/default`
+
+> **Примечание**: Kyuubi использует Spark SQL движок, поэтому поддерживает все возможности Spark SQL.
+
+### Spark через Jupyter
+- Откройте http://localhost:8888
+- Доступны ядра: Python (PySpark), Scala (Toree)
+- Автоматически подключен к YARN
+
+## 🗄️ Хранилище данных
+
+### HDFS директории
+- **Warehouse**: `/user/hive/warehouse`
+- **Scratch**: `/tmp/hive`
+- **Spark Events**: `/spark-events`
+- **Temp**: `/tmp`
+
+### Создание директорий
 ```bash
 docker exec hadoop-namenode hdfs dfs -mkdir -p /user/hive/warehouse /tmp/hive /tmp /spark-events
 docker exec hadoop-namenode hdfs dfs -chmod 1777 /tmp
 docker exec hadoop-namenode hdfs dfs -chmod 1777 /user/hive/warehouse
-docker exec hadoop-namenode hdfs dfs -chmod 733  /tmp/hive
+docker exec hadoop-namenode hdfs dfs -chmod 733 /tmp/hive
 ```
 
-## Тестирование Spark
+## 🧪 Тестирование
+
+### Быстрая проверка
 ```bash
+# Тестирование всех компонентов
+tests\test-cluster.bat
+```
+
+### Пошаговое тестирование
+
+#### HDFS тест
+- Доступность NameNode и DataNode
+- Создание и удаление файлов
+- Копирование данных между узлами
+- Проверка репликации
+
+```bash
+# HDFS - файловая система
+tests\test-hdfs.bat
+```
+
+#### YARN тест
+- Запуск MapReduce приложения
+- Проверка ResourceManager
+- Мониторинг контейнеров
+- Статус NodeManager
+
+```bash
+# YARN - управление ресурсами
+tests\test-yarn.bat
+```
+
+#### Spark тест
+- Запуск Spark Pi на YARN
+- PySpark приложение
+- Проверка Spark History Server
+- Подключение к Hive
+
+```bash
+# Spark - обработка данных
 tests\test-spark.bat
 ```
+#### Hive тест
+- Подключение к HiveServer2
+- Создание базы данных и таблиц
+- Выполнение SQL запросов
+- Проверка Metastore
 
-## Трассировка данных (OpenLineage/Marquez)
 ```bash
-tests\test-openlineage.bat
+# Hive - хранилище данных
+tests\test-hive.bat
 ```
-Слушатели OpenLineage подключены ко всем Spark-приложениям (Jupyter, Spark History, Kyuubi/SPARK SQL).
+#### Kyuubi тест
+- Подключение через Beeline
+- Создание таблиц через Spark SQL
+- Вставка и выборка данных
+- Проверка приложений в YARN
 
-## Kyuubi (Spark SQL over JDBC/Thrift)
 ```bash
+# Kyuubi - Spark SQL через JDBC
 tests\test-kyuubi.bat
 ```
-- Ручное подключение через Beeline:
+#### OpenLineage тест
+- Проверка Marquez API
+- Трассировка Spark приложений
+- Сбор метаданных
+- Визуализация в Marquez Web
+
 ```bash
-docker exec -it hadoop-hiveserver2 beeline -u 'jdbc:hive2://kyuubi:10009' -n hadoop
-```
-- Что делает тест:
-  - Проверяет порт 10009 и процесс Kyuubi
-  - Подключается beeline, выполняет DDL/DML в `kyuubi_db.kyuubi_table`
-  - Проверяет появление данных в HDFS и приложений SPARK в YARN
-
-### Конфигурация Kyuubi
-- Тип движка: `kyuubi.engine.type=SPARK_SQL` в `kyuubi/config/kyuubi-defaults.conf`
-- Spark/YARN: event logging в HDFS (`/spark-events`), warehouse в HDFS, master `yarn`, deploy-mode `client`
-- Имперсонация (proxyuser): в `base/config/core-site.xml`:
-  - `hadoop.proxyuser.hadoop.hosts=*`
-  - `hadoop.proxyuser.hadoop.groups=*`
-  (разрешает серверу Kyuubi запускать движки от имени `hadoop`).
-
-## JupyterLab
-- Том с ноутбуками монтируется в `/notebooks` (как оговорено [[memory:4954373]]).
-- Запуск JupyterLab: контейнер `jupyter` стартует вместе с кластером командой `pyspark --master yarn` и поднимает UI на `http://localhost:8888` (без токена/пароля в локальной среде).
-- Пример ноутбука `Welcome.ipynb` создаётся автоматически при пустом каталоге `/notebooks`.
-- Примеры ноутбуков:
-  - `notebooks/PySparkPi.ipynb` — PySpark Pi на YARN (ядро Python)
-  - `notebooks/ScalaSparkPi.ipynb` — Spark Pi на YARN (ядро "Toree - Scala")
-
-Пересборка Jupyter после изменений:
-```bash
-docker-compose build jupyter && docker-compose up -d jupyter
+# OpenLineage - трассировка данных
+tests\test-openlineage.bat
 ```
 
-Если при `docker-compose` видите предупреждение вида "The \"SPARK_VERSION\" variable is not set":
-- Добавьте переменную в `.env` или подключите `env_file` в compose, либо экспортируйте `SPARK_VERSION` в окружение перед запуском.
 
-В тесте выполняются:
-- Spark Pi (Scala) на YARN — через `spark-examples` jar
-- PySpark Pi на YARN — `spark/scripts/pyspark_pi.py`
+## 🔧 Ручное управление
 
-Замечания:
-- История событий Spark пишется в HDFS по пути `/spark-events` и доступна в UI `http://localhost:18080`.
-- При первом запуске Spark сам загрузит необходимые библиотеки в HDFS (`.sparkStaging`).
+### Сборка образов
+```bash
+# Базовый образ
+docker-compose build base
+
+# Spark образ
+docker-compose build spark-image
+
+# Jupyter образ
+docker-compose build jupyter
+```
+
+### Управление сервисами
+```bash
+# Запуск
+docker-compose up -d
+
+# Остановка
+docker-compose down
+
+# Перезапуск конкретного сервиса
+docker-compose restart jupyter
+```
+
+### Просмотр логов
+```bash
+# Все логи
+docker-compose logs -f
+
+# Логи конкретного сервиса
+docker-compose logs -f namenode
+```
+
+## 📊 Мониторинг
+
+### YARN приложения
+- Web UI: http://localhost:8088
+- История Spark: http://localhost:18080
+
+### HDFS статус
+```bash
+docker exec hadoop-namenode hdfs dfsadmin -report
+```
+
+### Проверка сервисов
+```bash
+# HDFS
+docker exec hadoop-namenode hdfs dfs -ls /
+
+# YARN
+docker exec hadoop-namenode yarn node -list
+
+# Hive
+docker exec hadoop-hiveserver2 beeline -u 'jdbc:hive2://localhost:10000' -n hadoop -e 'SHOW DATABASES;'
+```
+
+## 🚨 Устранение неполадок
+
+### Проблемы с портами
+- Убедитесь, что порты 9870, 8088, 8888, 10000 не заняты
+- Проверьте firewall на Windows
+
+### Проблемы с памятью
+- Увеличьте память Docker Desktop (рекомендуется 8GB+)
+- Проверьте настройки YARN в `base/config/yarn-site.xml`
+
+### Проблемы с сетью
+- Проверьте Docker сеть: `docker network ls`
+- Пересоздайте сеть: `docker network prune`
+
+### Пересборка после изменений
+```bash
+# Полная пересборка
+docker-compose down
+docker-compose build --no-cache
+docker-compose up -d
+```
+
+## 🔗 Полезные ссылки
+
+- [Apache Hadoop](https://hadoop.apache.org/)
+- [Apache Spark](https://spark.apache.org/)
+- [Apache Hive](https://hive.apache.org/)
+- [Apache Kyuubi](https://kyuubi.apache.org/)
+- [OpenLineage](https://openlineage.io/)
+- [JupyterLab](https://jupyterlab.readthedocs.io/)

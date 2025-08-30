@@ -1,14 +1,24 @@
 ﻿version: '3.8'
 
+x-versions: &versions
+  HADOOP_VERSION: ${HADOOP_VERSION}
+  HIVE_VERSION: ${HIVE_VERSION}
+  SPARK_VERSION: ${SPARK_VERSION}
+  SCALA_VERSION: ${SCALA_VERSION}
+  PYTHON_VERSION: ${PYTHON_VERSION}
+  KYUUBI_VERSION: ${KYUUBI_VERSION}
+  JUPYTER_VERSION: ${JUPYTER_VERSION}
+  OPENLINEAGE_VERSION: ${OPENLINEAGE_VERSION}
+  OPENLINEAGE_NAMESPACE: ${OPENLINEAGE_NAMESPACE}
+  JAVA_VERSION: ${JAVA_VERSION}
+
 services:
   base:
     build:
       context: ./base
       dockerfile: Dockerfile
       args:
-        HADOOP_VERSION: ${HADOOP_VERSION}
-        PYTHON_VERSION: ${PYTHON_VERSION}
-        SCALA_VERSION: ${SCALA_VERSION}
+        <<: *versions
     image: hadoop-cluster-base:latest
     profiles: ["build"]
   spark-image:
@@ -16,9 +26,7 @@ services:
       context: ./spark
       dockerfile: Dockerfile
       args:
-        SPARK_VERSION: ${SPARK_VERSION}
-        OPENLINEAGE_VERSION: ${OPENLINEAGE_VERSION}
-        SCALA_VERSION: ${SCALA_VERSION}
+        <<: *versions
     image: hadoop-cluster-spark:latest
     profiles: ["build"]
   marquez-db:
@@ -26,6 +34,7 @@ services:
     container_name: hadoop-marquez-db
     hostname: marquez-db
     environment:
+      <<: *versions
       POSTGRES_USER: marquez
       POSTGRES_PASSWORD: marquez
       POSTGRES_DB: marquez
@@ -47,6 +56,7 @@ services:
       marquez-db:
         condition: service_healthy
     environment:
+      <<: *versions
       MARQUEZ_DB_HOST: marquez-db
       MARQUEZ_DB_PORT: 5432
       MARQUEZ_DB: marquez
@@ -66,6 +76,7 @@ services:
     depends_on:
       - marquez
     environment:
+      <<: *versions
       MARQUEZ_HOST: marquez
       MARQUEZ_PORT: 5000
       MARQUEZ_URL: http://marquez:5000
@@ -76,9 +87,8 @@ services:
     image: postgres:13
     container_name: hadoop-postgres
     hostname: postgres
-    env_file:
-      - env_file
     environment:
+      <<: *versions
       POSTGRES_DB: hive_metastore
       POSTGRES_USER: hive
       POSTGRES_PASSWORD: hive
@@ -92,13 +102,9 @@ services:
       context: ./base
       dockerfile: Dockerfile
       args:
-        HADOOP_VERSION: ${HADOOP_VERSION:-3.3.6}
-        PYTHON_VERSION: ${PYTHON_VERSION:-3.8}
-        SCALA_VERSION: ${SCALA_VERSION:-2.13.8}
+        <<: *versions
     container_name: hadoop-namenode
     hostname: namenode
-    env_file:
-      - env_file
     ports:
       - "9870:9870"  # HDFS Web UI
       - "8088:8088"  # YARN Web UI
@@ -109,7 +115,8 @@ services:
       - namenode-logs:/opt/hadoop/logs
       - ./hive/config/hive-site.xml:/opt/hadoop/etc/hadoop/hive-site.xml:ro
     environment:
-      - HADOOP_CONF_DIR=/opt/hadoop/etc/hadoop
+      <<: *versions
+      HADOOP_CONF_DIR: /opt/hadoop/etc/hadoop
     command: ["/opt/scripts/start-namenode.sh"]
 
   datanode:
@@ -117,13 +124,9 @@ services:
       context: ./base
       dockerfile: Dockerfile
       args:
-        HADOOP_VERSION: ${HADOOP_VERSION:-3.3.6}
-        PYTHON_VERSION: ${PYTHON_VERSION:-3.8}
-        SCALA_VERSION: ${SCALA_VERSION:-2.13.8}
+        <<: *versions
     container_name: hadoop-datanode
     hostname: datanode
-    env_file:
-      - env_file
     ports:
       - "9864:9864"  # DataNode Web UI
       - "8042:8042"  # YARN Web UI
@@ -134,7 +137,8 @@ services:
       - datanode-logs:/opt/hadoop/logs
       - ./hive/config/hive-site.xml:/opt/hadoop/etc/hadoop/hive-site.xml:ro
     environment:
-      - HADOOP_CONF_DIR=/opt/hadoop/etc/hadoop
+      <<: *versions
+      HADOOP_CONF_DIR: /opt/hadoop/etc/hadoop
     depends_on:
       - namenode
     command: ["/opt/scripts/start-datanode.sh"]
@@ -144,11 +148,9 @@ services:
       context: ./hive
       dockerfile: Dockerfile
       args:
-        HIVE_VERSION: ${HIVE_VERSION:-3.1.3}
+        <<: *versions
     container_name: hadoop-hive-metastore
     hostname: hive-metastore
-    env_file:
-      - env_file
     ports:
       - "9083:9083"  # Hive Metastore
     volumes:
@@ -156,6 +158,8 @@ services:
       - ./logs:/mnt/logs
       - hive-warehouse:/opt/hive/warehouse
       - hive-logs:/opt/hive/logs
+    environment:
+      <<: *versions
     depends_on:
       - postgres
       - namenode
@@ -166,11 +170,9 @@ services:
       context: ./hive
       dockerfile: Dockerfile
       args:
-        HIVE_VERSION: ${HIVE_VERSION:-3.1.3}
+        <<: *versions
     container_name: hadoop-hiveserver2
     hostname: hiveserver2
-    env_file:
-      - env_file
     ports:
       - "10000:10000"  # HiveServer2 Thrift
       - "10002:10002"  # HiveServer2 Web UI
@@ -179,6 +181,8 @@ services:
       - ./logs:/mnt/logs
       - hive-warehouse:/opt/hive/warehouse
       - hive-logs:/opt/hive/logs
+    environment:
+      <<: *versions
     depends_on:
       - hive-metastore
     command: ["/opt/scripts/start-hiveserver2.sh"]
@@ -187,12 +191,11 @@ services:
     image: hadoop-cluster-spark:latest
     container_name: hadoop-spark-history
     hostname: spark-history
-    env_file:
-      - env_file
     ports:
       - "18080:18080"  # Spark History Server UI
     environment:
-      - HADOOP_CONF_DIR=/opt/hadoop/etc/hadoop
+      <<: *versions
+      HADOOP_CONF_DIR: /opt/hadoop/etc/hadoop
     volumes:
       - ./data:/mnt/data
       - ./logs:/mnt/logs
@@ -210,17 +213,14 @@ services:
       context: ./jupyter
       dockerfile: Dockerfile
       args:
-        SPARK_VERSION: ${SPARK_VERSION:-3.5.2}
-        JUPYTER_VERSION: ${JUPYTER_VERSION:-latest}
+        <<: *versions
     container_name: hadoop-jupyter
     hostname: jupyter
-    env_file:
-      - env_file
     ports:
       - "8888:8888"  # JupyterLab
     environment:
-      - HADOOP_CONF_DIR=/opt/hadoop/etc/hadoop
-      - SPARK_VERSION=${SPARK_VERSION}
+      <<: *versions
+      HADOOP_CONF_DIR: /opt/hadoop/etc/hadoop
     volumes:
       - ./jupyter/notebooks:/notebooks
       - ./data:/mnt/data
@@ -239,8 +239,7 @@ services:
       context: ./kyuubi
       dockerfile: Dockerfile
       args:
-        SPARK_VERSION: ${SPARK_VERSION:-3.5.2}
-        KYUUBI_VERSION: ${KYUUBI_VERSION:-1.8.0}
+        <<: *versions
     container_name: hadoop-kyuubi
     hostname: kyuubi
     depends_on:
@@ -251,9 +250,8 @@ services:
     ports:
       - "10009:10009"  # Thrift Binary
     environment:
-      - HADOOP_CONF_DIR=/opt/hadoop/etc/hadoop
-      - SPARK_VERSION=${SPARK_VERSION}
-      - KYUUBI_VERSION=${KYUUBI_VERSION}
+      <<: *versions
+      HADOOP_CONF_DIR: /opt/hadoop/etc/hadoop
     volumes:
       - ./data:/mnt/data
       - ./logs:/mnt/logs

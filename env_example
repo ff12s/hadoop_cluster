@@ -13,12 +13,3 @@ OPENLINEAGE_NAMESPACE=hadoop-cluster
 
 # Настройки Java
 JAVA_VERSION=8
-
-# Настройки сети
-HADOOP_NETWORK=hadoopclusternet
-
-# Настройки пользователей
-HADOOP_USER=hadoop
-HADOOP_GROUP=hadoop
-HADOOP_UID=1000
-HADOOP_GID=1000

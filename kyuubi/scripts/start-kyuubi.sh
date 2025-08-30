@@ -14,7 +14,6 @@ if [ ! -w "$KYUUBI_HOME/pid" ] || [ ! -w "$KYUUBI_HOME/logs" ] || [ ! -w "$KYUUB
   exit 1
 fi
 
-# Р—Р°РїСѓСЃРє Kyuuubi РІ foreground, С‡С‚РѕР±С‹ РєРѕРЅС‚РµР№РЅРµСЂ РЅРµ Р·Р°РІРµСЂС€Р°Р»СЃСЏ
 exec $KYUUBI_HOME/bin/kyuubi run
 
 

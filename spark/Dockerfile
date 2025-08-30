@@ -11,7 +11,6 @@ ENV PATH=$PATH:$SPARK_HOME/bin:$SPARK_HOME/sbin
 ENV OPENLINEAGE_VERSION=${OPENLINEAGE_VERSION}
 
 
-
 USER root
 
 # Установка Spark (бинарник для Hadoop 3, Scala ${SCALA_SHORT_VERSION})
