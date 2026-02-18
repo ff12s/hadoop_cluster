@@ -1,4 +1,4 @@
-﻿<?xml version="1.0"?>
+<?xml version="1.0"?>
 <?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
 <configuration>
     <!-- Hive Metastore Configuration -->
@@ -109,10 +109,29 @@
         <value>namenode:8032</value>
     </property>
     
-    <!-- Hive Execution Engine -->
+    <!-- Hive Execution Engine (TEZ) -->
     <property>
         <name>hive.execution.engine</name>
-        <value>mr</value>
+        <value>tez</value>
+    </property>
+    
+    <!-- TEZ container settings -->
+    <property>
+        <name>hive.tez.container.size</name>
+        <value>1024</value>
+        <description>Memory (MB) for TEZ containers used by Hive</description>
+    </property>
+    
+    <property>
+        <name>hive.tez.java.opts</name>
+        <value>-Xmx820m</value>
+        <description>Java opts for TEZ containers</description>
+    </property>
+    
+    <property>
+        <name>hive.tez.auto.reducer.parallelism</name>
+        <value>true</value>
+        <description>Enable automatic reducer parallelism tuning</description>
     </property>
     
     <!-- Hive Security -->

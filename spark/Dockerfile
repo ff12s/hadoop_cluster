@@ -15,7 +15,7 @@ USER root
 
 # Установка Spark (бинарник для Hadoop 3, Scala ${SCALA_SHORT_VERSION})
 RUN SCALA_SHORT_VERSION=$(echo ${SCALA_VERSION} | cut -d. -f1,2) && \
-    aria2c -x 16 -s 16 -d /tmp -o spark-${SPARK_VERSION}-bin-hadoop3-scala${SCALA_SHORT_VERSION}.tgz \
+    aria2c -x 16 -s 16 --file-allocation=none -d /tmp -o spark-${SPARK_VERSION}-bin-hadoop3-scala${SCALA_SHORT_VERSION}.tgz \
     https://archive.apache.org/dist/spark/spark-${SPARK_VERSION}/spark-${SPARK_VERSION}-bin-hadoop3-scala${SCALA_SHORT_VERSION}.tgz && \
     tar -xzf /tmp/spark-${SPARK_VERSION}-bin-hadoop3-scala${SCALA_SHORT_VERSION}.tgz -C /opt && \
     ln -s /opt/spark-${SPARK_VERSION}-bin-hadoop3-scala${SCALA_SHORT_VERSION} /opt/spark && \
@@ -25,7 +25,7 @@ RUN SCALA_SHORT_VERSION=$(echo ${SCALA_VERSION} | cut -d. -f1,2) && \
 
 # Добавление OpenLineage Spark Agent (Scala ${SCALA_SHORT_VERSION})
 RUN SCALA_SHORT_VERSION=$(echo ${SCALA_VERSION} | cut -d. -f1,2) && \
-    aria2c -x 16 -s 16 -d /opt/spark/jars -o openlineage-spark_${SCALA_SHORT_VERSION}-${OPENLINEAGE_VERSION}.jar \
+    aria2c -x 16 -s 16 --file-allocation=none -d /opt/spark/jars -o openlineage-spark_${SCALA_SHORT_VERSION}-${OPENLINEAGE_VERSION}.jar \
     https://repo1.maven.org/maven2/io/openlineage/openlineage-spark_${SCALA_SHORT_VERSION}/${OPENLINEAGE_VERSION}/openlineage-spark_${SCALA_SHORT_VERSION}-${OPENLINEAGE_VERSION}.jar && \
     chown -R hadoop:hadoop /opt/spark/jars
 

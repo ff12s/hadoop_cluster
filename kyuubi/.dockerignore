@@ -1,0 +1,7 @@
+*.md
+*.bat
+*.log
+.git
+.gitignore
+__pycache__
+*.pyc

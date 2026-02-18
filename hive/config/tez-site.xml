@@ -1,0 +1,107 @@
+<?xml version="1.0"?>
+<?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
+<configuration>
+    <!-- TEZ library location in HDFS -->
+    <property>
+        <name>tez.lib.uris</name>
+        <value>hdfs://namenode:9000/apps/tez/tez.tar.gz</value>
+        <description>Path to TEZ libraries in HDFS for YARN container localization</description>
+    </property>
+
+    <!-- Use Hadoop libraries from the cluster nodes -->
+    <property>
+        <name>tez.use.cluster.hadoop-libs</name>
+        <value>true</value>
+        <description>Use Hadoop jars from cluster nodes instead of packaging them in tez.tar.gz</description>
+    </property>
+
+    <!-- TEZ Application Master resources -->
+    <property>
+        <name>tez.am.resource.memory.mb</name>
+        <value>1024</value>
+        <description>Memory for the TEZ Application Master container</description>
+    </property>
+
+    <property>
+        <name>tez.am.resource.cpu.vcores</name>
+        <value>1</value>
+    </property>
+
+    <property>
+        <name>tez.am.launch.cmd-opts</name>
+        <value>-Xmx820m</value>
+        <description>Java opts for the TEZ Application Master</description>
+    </property>
+
+    <!-- TEZ Task resources -->
+    <property>
+        <name>tez.task.resource.memory.mb</name>
+        <value>1024</value>
+        <description>Memory for each TEZ task container</description>
+    </property>
+
+    <property>
+        <name>tez.task.resource.cpu.vcores</name>
+        <value>1</value>
+    </property>
+
+    <property>
+        <name>tez.task.launch.cmd-opts</name>
+        <value>-Xmx820m</value>
+        <description>Java opts for TEZ task containers</description>
+    </property>
+
+    <!-- Container JVM heap fraction -->
+    <property>
+        <name>tez.container.max.java.heap.fraction</name>
+        <value>0.8</value>
+    </property>
+
+    <!-- Input split grouping -->
+    <property>
+        <name>tez.grouping.min-size</name>
+        <value>16777216</value>
+        <description>Minimum group size for input splits (16 MB)</description>
+    </property>
+
+    <property>
+        <name>tez.grouping.max-size</name>
+        <value>1073741824</value>
+        <description>Maximum group size for input splits (1 GB)</description>
+    </property>
+
+    <!-- TEZ AM staging directory -->
+    <property>
+        <name>tez.staging-dir</name>
+        <value>/tmp/tez/staging</value>
+    </property>
+
+    <!-- DAG history logging via YARN Timeline Server -->
+    <property>
+        <name>tez.history.logging.service.class</name>
+        <value>org.apache.tez.dag.history.logging.ats.ATSHistoryLoggingService</value>
+    </property>
+
+    <property>
+        <name>tez.tez-ui.history-url.base</name>
+        <value>http://localhost:9999/</value>
+        <description>Base URL for the TEZ UI, used to generate links from YARN</description>
+    </property>
+
+    <!-- YARN Timeline Server connection -->
+    <property>
+        <name>yarn.timeline-service.enabled</name>
+        <value>true</value>
+    </property>
+
+    <property>
+        <name>tez.allow.disabled.timeline-domains</name>
+        <value>true</value>
+        <description>Allow TEZ to work when timeline domains are not enabled</description>
+    </property>
+
+    <property>
+        <name>tez.am.view-acls</name>
+        <value>*</value>
+    </property>
+</configuration>

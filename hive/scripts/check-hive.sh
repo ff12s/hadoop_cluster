@@ -1,9 +1,9 @@
-﻿#!/bin/bash
+#!/bin/bash
 
 echo "=== Checking Hive Health ==="
 
-# Check HiveServer2 via beeline (maximum 5 minutes)
-timeout=300
+# Check HiveServer2 via beeline (Hive+TEZ startup can take 5–10 minutes)
+timeout=600
 interval=15
 elapsed=0
 

@@ -12,7 +12,7 @@ ENV PATH=$PATH:$SPARK_HOME/bin:$SPARK_HOME/sbin:$KYUUBI_HOME/bin
 USER root
 
 # Install Kyuubi
-RUN aria2c -x 16 -s 16 -d /tmp -o apache-kyuubi-${KYUUBI_VERSION}-bin.tgz \
+RUN aria2c -x 16 -s 16 --file-allocation=none -d /tmp -o apache-kyuubi-${KYUUBI_VERSION}-bin.tgz \
     https://archive.apache.org/dist/kyuubi/kyuubi-${KYUUBI_VERSION}/apache-kyuubi-${KYUUBI_VERSION}-bin.tgz && \
     tar -xzf /tmp/apache-kyuubi-${KYUUBI_VERSION}-bin.tgz -C /opt && \
     ln -s /opt/apache-kyuubi-${KYUUBI_VERSION}-bin /opt/kyuubi && \

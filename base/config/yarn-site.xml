@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="UTF-8"?>
+<?xml version="1.0" encoding="UTF-8"?>
 <?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
 <configuration>
     <property>
@@ -27,7 +27,7 @@
     </property>
     <property>
         <name>yarn.application.classpath</name>
-        <value>/opt/hadoop/etc/hadoop:/opt/hadoop/share/hadoop/common/*:/opt/hadoop/share/hadoop/common/lib/*:/opt/hadoop/share/hadoop/hdfs/*:/opt/hadoop/share/hadoop/hdfs/lib/*:/opt/hadoop/share/hadoop/yarn/*:/opt/hadoop/share/hadoop/yarn/lib/*:/opt/hadoop/share/hadoop/mapreduce/*:/opt/hadoop/share/hadoop/mapreduce/lib/*</value>
+        <value>/opt/hadoop/etc/hadoop:/opt/hadoop/share/hadoop/common/*:/opt/hadoop/share/hadoop/common/lib/*:/opt/hadoop/share/hadoop/hdfs/*:/opt/hadoop/share/hadoop/hdfs/lib/*:/opt/hadoop/share/hadoop/yarn/*:/opt/hadoop/share/hadoop/yarn/lib/*:/opt/hadoop/share/hadoop/mapreduce/*:/opt/hadoop/share/hadoop/mapreduce/lib/*:/opt/tez/*:/opt/tez/lib/*</value>
     </property>
     <property>
         <name>yarn.nodemanager.resource.memory-mb</name>
@@ -56,5 +56,56 @@
     <property>
         <name>yarn.nodemanager.pmem-check-enabled</name>
         <value>false</value>
+    </property>
+
+    <!-- YARN Timeline Server (ATS) Configuration -->
+    <property>
+        <name>yarn.timeline-service.enabled</name>
+        <value>true</value>
+    </property>
+    <property>
+        <name>yarn.timeline-service.hostname</name>
+        <value>namenode</value>
+    </property>
+    <property>
+        <name>yarn.timeline-service.http-cross-origin.enabled</name>
+        <value>true</value>
+    </property>
+    <property>
+        <name>yarn.timeline-service.address</name>
+        <value>namenode:10200</value>
+    </property>
+    <property>
+        <name>yarn.timeline-service.webapp.address</name>
+        <value>namenode:8188</value>
+    </property>
+    <property>
+        <name>yarn.timeline-service.webapp.https.address</name>
+        <value>namenode:8190</value>
+    </property>
+    <property>
+        <name>yarn.timeline-service.generic-application-history.enabled</name>
+        <value>true</value>
+    </property>
+    <property>
+        <name>yarn.system-metrics-publisher.enabled</name>
+        <value>true</value>
+    </property>
+    <property>
+        <name>yarn.timeline-service.store-class</name>
+        <value>org.apache.hadoop.yarn.server.timeline.LeveldbTimelineStore</value>
+    </property>
+    <property>
+        <name>yarn.timeline-service.leveldb-timeline-store.path</name>
+        <value>/opt/hadoop/timeline-data</value>
+    </property>
+    <property>
+        <name>yarn.timeline-service.ttl-enable</name>
+        <value>true</value>
+    </property>
+    <property>
+        <name>yarn.timeline-service.ttl-ms</name>
+        <value>604800000</value>
+        <description>7 days TTL for timeline data</description>
     </property>
 </configuration>

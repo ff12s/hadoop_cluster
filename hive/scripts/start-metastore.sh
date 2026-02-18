@@ -1,4 +1,4 @@
-﻿#!/bin/bash
+#!/bin/bash
 set -euo pipefail
 
 echo "=== Starting Hive Metastore ==="
@@ -12,6 +12,9 @@ done
 
 echo "PostgreSQL is ready!"
 
+# Classpath without TEZ to avoid FsTracer/HTrace conflicts with Hadoop 3.3 (metastore does not run TEZ)
+export HADOOP_CLASSPATH=$HADOOP_CONF_DIR:$HIVE_HOME/lib/*
+
 # Initialize/Upgrade metastore schema
 echo "Initializing/Upgrading Hive Metastore schema..."
 if schematool -dbType postgres -info >/dev/null 2>&1; then
@@ -24,7 +27,6 @@ fi
 
 # Start Hive Metastore
 echo "Starting Hive Metastore..."
-export HADOOP_CLASSPATH=$HADOOP_CONF_DIR:$HADOOP_CLASSPATH:$HIVE_HOME/lib/*
 $HIVE_HOME/bin/hive --service metastore &
 
 # Wait for startup

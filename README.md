@@ -2,93 +2,158 @@
 
 Тестовый кластер Hadoop с полным стеком технологий для разработки и тестирования Big Data приложений.
 
-## 🚀 Компоненты кластера
+## Компоненты кластера
 
-- **Hadoop 3.3.6** - HDFS, YARN, MapReduce
-- **Hive 3.1.3** - Data Warehouse с PostgreSQL 13
-- **Spark 3.5.2** - Обработка данных и машинное обучение
-- **JupyterLab** - Интерактивная разработка с PySpark и Scala
-- **Kyuubi 1.10.2** - Spark SQL через JDBC/Thrift
-- **OpenLineage** - Трассировка данных (Marquez)
+- **Hadoop 3.3.6** — HDFS, YARN, MapReduce, Timeline Server
+- **Hive 3.1.3** — Data Warehouse с PostgreSQL 13 и движком **Apache Tez**
+- **Apache Tez 0.10.2** — DAG-движок для Hive (замена MapReduce), с Tez UI
+- **Spark 3.5.2** — Обработка данных и машинное обучение
+- **JupyterLab** — Интерактивная разработка с PySpark и Scala
+- **Kyuubi 1.10.2** — Spark SQL через JDBC/Thrift
+- **OpenLineage** — Трассировка данных (Marquez)
+- **Nginx** — Реверс-прокси для всех веб-интерфейсов
 - **Java 8**, **Python 3.12**, **Scala 2.13.8**
 
-## 📋 Быстрый старт
+## Быстрый старт
+
+### Предварительные требования
+
+- Docker Desktop (рекомендуется 8 GB+ RAM)
+- Docker Compose
 
 ### Запуск кластера
+
 ```bash
-# Полный запуск с пересборкой образов
+# Полный запуск: сборка образов + запуск + проверка здоровья
 start-cluster.bat
+
+# Полный запуск с очисткой volumes
+start-cluster.bat clean
 
 # Остановка
 docker compose stop
+
+# Остановка с удалением контейнеров
+docker compose down
 ```
 
-## 🌐 Веб-интерфейсы
+## Веб-интерфейсы
+
+Все веб-интерфейсы доступны через Nginx реверс-прокси — внутренние hostname контейнеров автоматически заменяются на `localhost`.
 
 | Сервис | URL | Описание |
 |--------|-----|----------|
 | HDFS NameNode | http://localhost:9870 | Управление файловой системой |
-| YARN ResourceManager | http://localhost:8088 | Управление ресурсами |
-| Spark History Server | http://localhost:18080 | История Spark приложений |
-| JupyterLab | http://localhost:8888 | Интерактивная разработка |
+| HDFS DataNode | http://localhost:9864 | Информация о DataNode |
+| YARN ResourceManager | http://localhost:8088 | Управление ресурсами и приложениями |
+| YARN NodeManager | http://localhost:8042 | Информация о NodeManager |
+| YARN Timeline Server | http://localhost:8188 | История приложений YARN |
+| Tez UI | http://localhost:9999 | Мониторинг DAG-задач Tez |
+| Spark History Server | http://localhost:18080 | История Spark-приложений |
 | HiveServer2 Web UI | http://localhost:10002 | Веб-интерфейс Hive |
+| JupyterLab | http://localhost:8888 | Интерактивная разработка |
 | Marquez Web | http://localhost:3000 | Трассировка данных |
 | Marquez API | http://localhost:5000 | API для трассировки |
 
-## 📁 Структура проекта
+## Архитектура
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  Nginx Reverse Proxy (webproxy)                                 │
+│  :9870 :8088 :8188 :9864 :8042 :10002 :9999 :18080             │
+└────────┬────────┬────────┬────────┬────────┬────────┬───────────┘
+         │        │        │        │        │        │
+   ┌─────▼──┐ ┌──▼───┐ ┌──▼──┐ ┌──▼───┐ ┌──▼──┐ ┌──▼──────┐
+   │NameNode│ │Data  │ │Tez  │ │Hive  │ │Hive │ │Spark    │
+   │ + YARN │ │Node  │ │UI   │ │Server│ │Meta │ │History  │
+   │ + ATS  │ │      │ │     │ │2     │ │store│ │Server   │
+   └───┬────┘ └──┬───┘ └─────┘ └──┬───┘ └──┬──┘ └─────────┘
+       │         │                 │        │
+       └─────┬───┘        ┌───────┘   ┌────┘
+             │             │           │
+        ┌────▼────┐   ┌───▼───┐  ┌────▼─────┐
+        │  HDFS   │   │Kyuubi │  │PostgreSQL │
+        │         │   │:10009 │  │(Metastore)│
+        └─────────┘   └───────┘  └───────────┘
+
+   ┌──────────┐  ┌──────────┐  ┌───────────────┐
+   │JupyterLab│  │ Marquez  │  │  Marquez DB   │
+   │  :8888   │  │:3000/:5k │  │  (PostgreSQL) │
+   └──────────┘  └──────────┘  └───────────────┘
+```
+
+## Структура проекта
 
 ```
 hadoop_cluster/
 ├── base/                    # Базовый образ Hadoop
-│   ├── config/              # Конфиги: core-site, hdfs-site, yarn-site, mapred-site
+│   ├── config/              # core-site, hdfs-site, yarn-site, mapred-site
 │   ├── scripts/             # Скрипты запуска и проверки
+│   ├── .dockerignore
 │   └── Dockerfile
-├── hive/                    # Hive (Metastore + HiveServer2)
-│   ├── config/              # hive-site.xml
-│   ├── scripts/             # Скрипты запуска
+├── hive/                    # Hive + Tez (Metastore + HiveServer2 + Tez UI)
+│   ├── config/              # hive-site.xml, tez-site.xml
+│   ├── scripts/             # start-metastore, start-hiveserver2, start-tez-ui
+│   ├── .dockerignore
 │   └── Dockerfile
 ├── spark/                   # Spark с History Server
 │   ├── config/              # spark-defaults.conf, log4j.properties
 │   ├── scripts/             # Скрипты запуска и тестирования
+│   ├── .dockerignore
 │   └── Dockerfile
 ├── jupyter/                 # JupyterLab
 │   ├── notebooks/           # Jupyter ноутбуки
 │   ├── scripts/             # Скрипты запуска
+│   ├── .dockerignore
 │   └── Dockerfile
 ├── kyuubi/                  # Kyuubi (Spark SQL)
 │   ├── config/              # kyuubi-defaults.conf
 │   ├── scripts/             # Скрипты запуска
+│   ├── .dockerignore
 │   └── Dockerfile
 ├── marquez/                 # OpenLineage
 │   └── config/              # config.yml
+├── nginx/                   # Реверс-прокси
+│   └── nginx.conf           # Конфигурация проксирования всех UI
 ├── tests/                   # Тестовые скрипты
 ├── docker-compose.yml       # Конфигурация кластера
-├── .env                     # Переменные окружения
+├── env_example              # Пример переменных окружения
+├── start-cluster.bat        # Скрипт запуска кластера
 └── README.md
 ```
 
-## ⚙️ Конфигурация
+## Конфигурация
 
 ### Переменные окружения (.env)
 
+Скопируйте `env_example` в `.env` и при необходимости отредактируйте:
+
+```bash
+copy env_example .env
+```
+
 #### Версии компонентов
-- `HADOOP_VERSION=3.3.6` - Apache Hadoop
-- `HIVE_VERSION=3.1.3` - Apache Hive
-- `SPARK_VERSION=3.5.2` - Apache Spark
-- `SCALA_VERSION=2.13.8` - Scala
-- `PYTHON_VERSION=3.12.7` - Python
-- `KYUUBI_VERSION=1.10.2` - Apache Kyuubi
-- `JUPYTER_VERSION=latest` - JupyterLab
-- `JAVA_VERSION=8` - Java (OpenJDK)
+| Переменная | Значение | Описание |
+|------------|----------|----------|
+| `HADOOP_VERSION` | `3.3.6` | Apache Hadoop |
+| `HIVE_VERSION` | `3.1.3` | Apache Hive |
+| `TEZ_VERSION` | `0.10.2` | Apache Tez |
+| `SPARK_VERSION` | `3.5.2` | Apache Spark |
+| `SCALA_VERSION` | `2.13.8` | Scala |
+| `PYTHON_VERSION` | `3.12.7` | Python |
+| `KYUUBI_VERSION` | `1.10.2` | Apache Kyuubi |
+| `JUPYTER_VERSION` | `latest` | JupyterLab |
+| `JAVA_VERSION` | `8` | Java (OpenJDK) |
 
 #### OpenLineage
-- `OPENLINEAGE_VERSION=1.37.0` - Версия OpenLineage
-- `OPENLINEAGE_NAMESPACE=hadoop-cluster` - Пространство имен
+| Переменная | Значение | Описание |
+|------------|----------|----------|
+| `OPENLINEAGE_VERSION` | `1.37.0` | Версия OpenLineage |
+| `OPENLINEAGE_NAMESPACE` | `hadoop-cluster` | Пространство имён |
 
+## Подключения
 
-## 🔌 Подключения
-
-### Hive через DBeaver
+### Hive через DBeaver / JDBC
 - **Драйвер**: Apache Hive 3.1+
 - **Host**: `localhost`
 - **Port**: `10000`
@@ -97,10 +162,10 @@ hadoop_cluster/
 - **Database**: `default`
 - **JDBC URL**: `jdbc:hive2://localhost:10000/default`
 
-> **Примечание**: Hive использует MapReduce движок, который медленнее Spark. Для лучшей производительности рекомендуется использовать **Kyuubi** (порт 10009), который работает на Spark SQL.
+> Hive использует **Tez** в качестве движка выполнения запросов, что значительно быстрее MapReduce. DAG-задачи можно мониторить в [Tez UI](http://localhost:9999).
 
-### Kyuubi через DBeaver
-- **Драйвер**: Apache kyuubi Hive 3.1+
+### Kyuubi через DBeaver / JDBC
+- **Драйвер**: Apache Hive 3.1+
 - **Host**: `localhost`
 - **Port**: `10009`
 - **User**: `hadoop`
@@ -108,22 +173,27 @@ hadoop_cluster/
 - **Database**: `default`
 - **JDBC URL**: `jdbc:hive2://localhost:10009/default`
 
-> **Примечание**: Kyuubi использует Spark SQL движок, поэтому поддерживает все возможности Spark SQL.
+> Kyuubi использует **Spark SQL** в качестве движка, поддерживает все возможности Spark SQL.
 
 ### Spark через Jupyter
 - Откройте http://localhost:8888
 - Доступны ядра: Python (PySpark), Scala (Toree)
-- Автоматически подключен к YARN
+- Автоматически подключён к YARN
 
-## 🗄️ Хранилище данных
+## Хранилище данных
 
 ### HDFS директории
-- **Warehouse**: `/user/hive/warehouse`
-- **Scratch**: `/tmp/hive`
-- **Spark Events**: `/spark-events`
-- **Temp**: `/tmp`
+| Путь | Назначение |
+|------|------------|
+| `/user/hive/warehouse` | Hive Warehouse |
+| `/tmp/hive` | Hive Scratch |
+| `/apps/tez/tez.tar.gz` | Библиотеки Tez |
+| `/tmp/tez/staging` | Tez staging |
+| `/spark-events` | Spark Event Logs |
+| `/tmp` | Временные файлы |
 
-### Создание директорий
+### Создание директорий вручную
+
 ```bash
 docker exec hadoop-namenode hdfs dfs -mkdir -p /user/hive/warehouse /tmp/hive /tmp /spark-events
 docker exec hadoop-namenode hdfs dfs -chmod 1777 /tmp
@@ -131,9 +201,10 @@ docker exec hadoop-namenode hdfs dfs -chmod 1777 /user/hive/warehouse
 docker exec hadoop-namenode hdfs dfs -chmod 733 /tmp/hive
 ```
 
-## 🧪 Тестирование
+## Тестирование
 
 ### Быстрая проверка
+
 ```bash
 # Тестирование всех компонентов
 tests\test-cluster.bat
@@ -141,117 +212,82 @@ tests\test-cluster.bat
 
 ### Пошаговое тестирование
 
-#### HDFS тест
-- Доступность NameNode и DataNode
-- Создание и удаление файлов
-- Копирование данных между узлами
-- Проверка репликации
+| Тест | Команда | Что проверяет |
+|------|---------|---------------|
+| HDFS | `tests\test-hdfs.bat` | NameNode, DataNode, создание файлов, репликация |
+| YARN | `tests\test-yarn.bat` | ResourceManager, NodeManager, MapReduce |
+| Spark | `tests\test-spark.bat` | Spark Pi на YARN, PySpark, History Server |
+| Hive | `tests\test-hive.bat` | HiveServer2, создание таблиц, SQL-запросы, Metastore |
+| Kyuubi | `tests\test-kyuubi.bat` | Beeline, Spark SQL таблицы, приложения в YARN |
+| OpenLineage | `tests\test-openlineage.bat` | Marquez API, трассировка Spark, метаданные |
 
-```bash
-# HDFS - файловая система
-tests\test-hdfs.bat
-```
-
-#### YARN тест
-- Запуск MapReduce приложения
-- Проверка ResourceManager
-- Мониторинг контейнеров
-- Статус NodeManager
-
-```bash
-# YARN - управление ресурсами
-tests\test-yarn.bat
-```
-
-#### Spark тест
-- Запуск Spark Pi на YARN
-- PySpark приложение
-- Проверка Spark History Server
-- Подключение к Hive
-
-```bash
-# Spark - обработка данных
-tests\test-spark.bat
-```
-#### Hive тест
-- Подключение к HiveServer2
-- Создание базы данных и таблиц
-- Выполнение SQL запросов
-- Проверка Metastore
-
-```bash
-# Hive - хранилище данных
-tests\test-hive.bat
-```
-#### Kyuubi тест
-- Подключение через Beeline
-- Создание таблиц через Spark SQL
-- Вставка и выборка данных
-- Проверка приложений в YARN
-
-```bash
-# Kyuubi - Spark SQL через JDBC
-tests\test-kyuubi.bat
-```
-#### OpenLineage тест
-- Проверка Marquez API
-- Трассировка Spark приложений
-- Сбор метаданных
-- Визуализация в Marquez Web
-
-```bash
-# OpenLineage - трассировка данных
-tests\test-openlineage.bat
-```
-
-
-## 🔧 Ручное управление
+## Ручное управление
 
 ### Сборка образов
+
 ```bash
-# Базовый образ
-docker-compose build base
+# Базовый образ (Hadoop + Python + Scala)
+docker compose build base
 
 # Spark образ
-docker-compose build spark-image
+docker compose build spark-image
+
+# Hive образ (включает Tez)
+docker compose build hive-metastore
 
 # Jupyter образ
-docker-compose build jupyter
+docker compose build jupyter
+
+# Kyuubi образ
+docker compose build kyuubi
 ```
 
 ### Управление сервисами
+
 ```bash
-# Запуск
-docker-compose up -d
+# Запуск всего кластера
+docker compose up -d
 
 # Остановка
-docker-compose down
+docker compose down
 
 # Перезапуск конкретного сервиса
-docker-compose restart jupyter
+docker compose restart jupyter
 ```
 
 ### Просмотр логов
+
 ```bash
 # Все логи
-docker-compose logs -f
+docker compose logs -f
 
 # Логи конкретного сервиса
-docker-compose logs -f namenode
+docker compose logs -f namenode
+docker compose logs -f hiveserver2
+docker compose logs -f tez-ui
 ```
 
-## 📊 Мониторинг
+## Мониторинг
 
 ### YARN приложения
-- Web UI: http://localhost:8088
-- История Spark: http://localhost:18080
+- ResourceManager: http://localhost:8088
+- Timeline Server: http://localhost:8188
+- NodeManager: http://localhost:8042
+
+### Tez DAG
+- Tez UI: http://localhost:9999 — визуализация DAG, счётчики, диагностика
+
+### Spark
+- History Server: http://localhost:18080
 
 ### HDFS статус
+
 ```bash
 docker exec hadoop-namenode hdfs dfsadmin -report
 ```
 
 ### Проверка сервисов
+
 ```bash
 # HDFS
 docker exec hadoop-namenode hdfs dfs -ls /
@@ -261,35 +297,58 @@ docker exec hadoop-namenode yarn node -list
 
 # Hive
 docker exec hadoop-hiveserver2 beeline -u 'jdbc:hive2://localhost:10000' -n hadoop -e 'SHOW DATABASES;'
+
+# Kyuubi
+docker exec hadoop-kyuubi beeline -u 'jdbc:hive2://localhost:10009' -n hadoop -e 'SHOW DATABASES;'
 ```
 
-## 🚨 Устранение неполадок
+## Устранение неполадок
 
 ### Проблемы с портами
-- Убедитесь, что порты 9870, 8088, 8888, 10000 не заняты
-- Проверьте firewall на Windows
+Убедитесь, что следующие порты не заняты:
+
+| Порт | Сервис |
+|------|--------|
+| 3000 | Marquez Web |
+| 5000 | Marquez API |
+| 5433 | Marquez PostgreSQL |
+| 5434 | Hive Metastore PostgreSQL |
+| 8042 | YARN NodeManager UI |
+| 8088 | YARN ResourceManager UI |
+| 8188 | YARN Timeline Server |
+| 8888 | JupyterLab |
+| 9083 | Hive Metastore Thrift |
+| 9864 | HDFS DataNode UI |
+| 9870 | HDFS NameNode UI |
+| 9999 | Tez UI |
+| 10000 | HiveServer2 Thrift |
+| 10002 | HiveServer2 Web UI |
+| 10009 | Kyuubi Thrift |
+| 18080 | Spark History Server |
 
 ### Проблемы с памятью
-- Увеличьте память Docker Desktop (рекомендуется 8GB+)
-- Проверьте настройки YARN в `base/config/yarn-site.xml`
+- Увеличьте память Docker Desktop (рекомендуется 8 GB+)
+- Настройки ресурсов YARN: `base/config/yarn-site.xml` (по умолчанию 8192 MB / 4 vCores)
 
 ### Проблемы с сетью
-- Проверьте Docker сеть: `docker network ls`
+- Проверьте Docker сеть: `docker network ls` (сеть `hadoopclusternet`)
 - Пересоздайте сеть: `docker network prune`
 
 ### Пересборка после изменений
+
 ```bash
 # Полная пересборка
-docker-compose down
-docker-compose build --no-cache
-docker-compose up -d
+docker compose down
+docker compose build --no-cache
+docker compose up -d
 ```
 
-## 🔗 Полезные ссылки
+## Полезные ссылки
 
 - [Apache Hadoop](https://hadoop.apache.org/)
 - [Apache Spark](https://spark.apache.org/)
 - [Apache Hive](https://hive.apache.org/)
+- [Apache Tez](https://tez.apache.org/)
 - [Apache Kyuubi](https://kyuubi.apache.org/)
 - [OpenLineage](https://openlineage.io/)
 - [JupyterLab](https://jupyterlab.readthedocs.io/)

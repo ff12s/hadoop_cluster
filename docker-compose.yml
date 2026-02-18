@@ -1,4 +1,4 @@
-﻿version: '3.8'
+version: '3.8'
 
 x-versions: &versions
   HADOOP_VERSION: ${HADOOP_VERSION}
@@ -7,6 +7,7 @@ x-versions: &versions
   SCALA_VERSION: ${SCALA_VERSION}
   PYTHON_VERSION: ${PYTHON_VERSION}
   KYUUBI_VERSION: ${KYUUBI_VERSION}
+  TEZ_VERSION: ${TEZ_VERSION}
   JUPYTER_VERSION: ${JUPYTER_VERSION}
   OPENLINEAGE_VERSION: ${OPENLINEAGE_VERSION}
   OPENLINEAGE_NAMESPACE: ${OPENLINEAGE_NAMESPACE}
@@ -95,43 +96,33 @@ services:
     volumes:
       - postgres-data:/var/lib/postgresql/data
     ports:
-      - "5432:5432"
+      - "5434:5432"  # Hive Metastore PostgreSQL (non-default port to avoid conflicts)
 
   namenode:
-    build:
-      context: ./base
-      dockerfile: Dockerfile
-      args:
-        <<: *versions
+    image: hadoop-cluster-base:latest
     container_name: hadoop-namenode
     hostname: namenode
-    ports:
-      - "9870:9870"  # HDFS Web UI
-      - "8088:8088"  # YARN Web UI
+    user: "0:0"
     volumes:
       - namenode-data:/opt/hadoop/dfs/name
       - namenode-logs:/opt/hadoop/logs
+      - timeline-data:/opt/hadoop/timeline-data
       - ./hive/config/hive-site.xml:/opt/hadoop/etc/hadoop/hive-site.xml:ro
+      - ./hive/config/tez-site.xml:/opt/hadoop/etc/hadoop/tez-site.xml:ro
     environment:
       <<: *versions
       HADOOP_CONF_DIR: /opt/hadoop/etc/hadoop
     command: ["/opt/scripts/start-namenode.sh"]
 
   datanode:
-    build:
-      context: ./base
-      dockerfile: Dockerfile
-      args:
-        <<: *versions
+    image: hadoop-cluster-base:latest
     container_name: hadoop-datanode
     hostname: datanode
-    ports:
-      - "9864:9864"  # DataNode Web UI
-      - "8042:8042"  # YARN Web UI
     volumes:
       - datanode-data:/opt/hadoop/dfs/data
       - datanode-logs:/opt/hadoop/logs
       - ./hive/config/hive-site.xml:/opt/hadoop/etc/hadoop/hive-site.xml:ro
+      - ./hive/config/tez-site.xml:/opt/hadoop/etc/hadoop/tez-site.xml:ro
     environment:
       <<: *versions
       HADOOP_CONF_DIR: /opt/hadoop/etc/hadoop
@@ -145,6 +136,7 @@ services:
       dockerfile: Dockerfile
       args:
         <<: *versions
+    image: hadoop-cluster-hive:latest
     container_name: hadoop-hive-metastore
     hostname: hive-metastore
     ports:
@@ -160,16 +152,11 @@ services:
     command: ["/opt/scripts/start-metastore.sh"]
 
   hiveserver2:
-    build:
-      context: ./hive
-      dockerfile: Dockerfile
-      args:
-        <<: *versions
+    image: hadoop-cluster-hive:latest
     container_name: hadoop-hiveserver2
     hostname: hiveserver2
     ports:
       - "10000:10000"  # HiveServer2 Thrift
-      - "10002:10002"  # HiveServer2 Web UI
     volumes:
       - hive-warehouse:/opt/hive/warehouse
       - hive-logs:/opt/hive/logs
@@ -177,14 +164,23 @@ services:
       <<: *versions
     depends_on:
       - hive-metastore
+      - namenode
     command: ["/opt/scripts/start-hiveserver2.sh"]
+
+  tez-ui:
+    image: hadoop-cluster-hive:latest
+    container_name: hadoop-tez-ui
+    hostname: tez-ui
+    environment:
+      <<: *versions
+    depends_on:
+      - namenode
+    command: ["/opt/scripts/start-tez-ui.sh"]
 
   spark-history:
     image: hadoop-cluster-spark:latest
     container_name: hadoop-spark-history
     hostname: spark-history
-    ports:
-      - "18080:18080"  # Spark History Server UI
     environment:
       <<: *versions
       HADOOP_CONF_DIR: /opt/hadoop/etc/hadoop
@@ -246,11 +242,31 @@ services:
       - ./spark/config/log4j.properties:/opt/spark/conf/log4j.properties:ro
     command: ["/opt/scripts/start-kyuubi.sh"]
 
+  webproxy:
+    image: nginx:alpine
+    container_name: hadoop-webproxy
+    hostname: webproxy
+    ports:
+      - "9870:9870"    # HDFS NameNode UI
+      - "8088:8088"    # YARN ResourceManager UI
+      - "8188:8188"    # YARN Timeline Server
+      - "9864:9864"    # HDFS DataNode UI
+      - "8042:8042"    # YARN NodeManager UI
+      - "10002:10002"  # HiveServer2 Web UI
+      - "9999:9999"    # TEZ UI
+      - "18080:18080"  # Spark History Server
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - namenode
+      - datanode
+
 volumes:
   postgres-data:
   marquez-data:
   namenode-data:
   namenode-logs:
+  timeline-data:
   datanode-data:
   datanode-logs:
   hive-warehouse:

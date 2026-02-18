@@ -43,11 +43,11 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Установка Python из исходного кода
-RUN aria2c -x 16 -s 16 -d /tmp -o Python-${PYTHON_VERSION}.tgz \
+RUN aria2c -x 16 -s 16 --file-allocation=none -d /tmp -o Python-${PYTHON_VERSION}.tgz \
     https://www.python.org/ftp/python/${PYTHON_VERSION}/Python-${PYTHON_VERSION}.tgz && \
     tar -xzf /tmp/Python-${PYTHON_VERSION}.tgz -C /tmp && \
     cd /tmp/Python-${PYTHON_VERSION} && \
-    ./configure --prefix=/opt/python${PYTHON_VERSION} --enable-optimizations && \
+    ./configure --prefix=/opt/python${PYTHON_VERSION} && \
     make -j$(nproc) && \
     make install && \
     ln -s /opt/python${PYTHON_VERSION}/bin/python${PYTHON_VERSION} /usr/local/bin/python${PYTHON_VERSION} && \
@@ -60,14 +60,14 @@ RUN aria2c -x 16 -s 16 -d /tmp -o Python-${PYTHON_VERSION}.tgz \
     rm -f /tmp/Python-${PYTHON_VERSION}.tgz
 
 # Установка Scala
-RUN aria2c -x 16 -s 16 -d /tmp -o scala-${SCALA_VERSION}.tgz \
+RUN aria2c -x 16 -s 16 --file-allocation=none -d /tmp -o scala-${SCALA_VERSION}.tgz \
     https://downloads.lightbend.com/scala/${SCALA_VERSION}/scala-${SCALA_VERSION}.tgz && \
     tar -xzf /tmp/scala-${SCALA_VERSION}.tgz -C /opt && \
     ln -s /opt/scala-${SCALA_VERSION} /opt/scala && \
     rm -f /tmp/scala-${SCALA_VERSION}.tgz
 
 # Установка Hadoop
-RUN aria2c -x 16 -s 16 -d /tmp -o hadoop-${HADOOP_VERSION}.tar.gz \
+RUN aria2c -x 16 -s 16 --file-allocation=none -d /tmp -o hadoop-${HADOOP_VERSION}.tar.gz \
     https://archive.apache.org/dist/hadoop/common/hadoop-${HADOOP_VERSION}/hadoop-${HADOOP_VERSION}.tar.gz && \
     tar -xzf /tmp/hadoop-${HADOOP_VERSION}.tar.gz -C /opt && \
     mkdir -p /opt/hadoop && \
