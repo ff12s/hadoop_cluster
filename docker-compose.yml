@@ -20,7 +20,7 @@ services:
       dockerfile: Dockerfile
       args:
         <<: *versions
-    image: hadoop-cluster-base:latest
+    image: ${BASE_IMAGE:-hadoop-cluster-base:latest}
     profiles: ["build"]
   spark-image:
     build:
@@ -28,7 +28,7 @@ services:
       dockerfile: Dockerfile
       args:
         <<: *versions
-    image: hadoop-cluster-spark:latest
+    image: ${SPARK_IMAGE:-hadoop-cluster-spark:latest}
     profiles: ["build"]
   marquez-db:
     image: postgres:13
@@ -99,7 +99,7 @@ services:
       - "5434:5432"  # Hive Metastore PostgreSQL (non-default port to avoid conflicts)
 
   namenode:
-    image: hadoop-cluster-base:latest
+    image: ${BASE_IMAGE:-hadoop-cluster-base:latest}
     container_name: hadoop-namenode
     hostname: namenode
     user: "0:0"
@@ -115,7 +115,7 @@ services:
     command: ["/opt/scripts/start-namenode.sh"]
 
   datanode:
-    image: hadoop-cluster-base:latest
+    image: ${BASE_IMAGE:-hadoop-cluster-base:latest}
     container_name: hadoop-datanode
     hostname: datanode
     volumes:
@@ -136,7 +136,7 @@ services:
       dockerfile: Dockerfile
       args:
         <<: *versions
-    image: hadoop-cluster-hive:latest
+    image: ${HIVE_IMAGE:-hadoop-cluster-hive:latest}
     container_name: hadoop-hive-metastore
     hostname: hive-metastore
     ports:
@@ -152,7 +152,7 @@ services:
     command: ["/opt/scripts/start-metastore.sh"]
 
   hiveserver2:
-    image: hadoop-cluster-hive:latest
+    image: ${HIVE_IMAGE:-hadoop-cluster-hive:latest}
     container_name: hadoop-hiveserver2
     hostname: hiveserver2
     ports:
@@ -168,7 +168,7 @@ services:
     command: ["/opt/scripts/start-hiveserver2.sh"]
 
   tez-ui:
-    image: hadoop-cluster-hive:latest
+    image: ${HIVE_IMAGE:-hadoop-cluster-hive:latest}
     container_name: hadoop-tez-ui
     hostname: tez-ui
     environment:
@@ -178,7 +178,7 @@ services:
     command: ["/opt/scripts/start-tez-ui.sh"]
 
   spark-history:
-    image: hadoop-cluster-spark:latest
+    image: ${SPARK_IMAGE:-hadoop-cluster-spark:latest}
     container_name: hadoop-spark-history
     hostname: spark-history
     environment:
@@ -200,6 +200,7 @@ services:
       dockerfile: Dockerfile
       args:
         <<: *versions
+    image: ${JUPYTER_IMAGE:-hadoop-cluster-jupyter:latest}
     container_name: hadoop-jupyter
     hostname: jupyter
     ports:
@@ -224,6 +225,7 @@ services:
       dockerfile: Dockerfile
       args:
         <<: *versions
+    image: ${KYUUBI_IMAGE:-hadoop-cluster-kyuubi:latest}
     container_name: hadoop-kyuubi
     hostname: kyuubi
     depends_on:

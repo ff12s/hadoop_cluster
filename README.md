@@ -24,7 +24,7 @@
 ### Запуск кластера
 
 ```bash
-# Полный запуск: сборка образов + запуск + проверка здоровья
+# Полный запуск: pull из Docker Hub, при отсутствии тега — build, затем запуск + health-check
 start-cluster.bat
 
 # Полный запуск с очисткой volumes
@@ -116,6 +116,9 @@ hadoop_cluster/
 ├── nginx/                   # Реверс-прокси
 │   └── nginx.conf           # Конфигурация проксирования всех UI
 ├── tests/                   # Тестовые скрипты
+├── scripts/                 # Утилиты для тегов и публикации образов
+│   ├── image-tags.ps1       # Единый генератор тегов/имен образов
+│   └── push-images.ps1      # Tag + push образов в Docker Hub
 ├── docker-compose.yml       # Конфигурация кластера
 ├── env_example              # Пример переменных окружения
 ├── start-cluster.bat        # Скрипт запуска кластера
@@ -142,7 +145,7 @@ copy env_example .env
 | `SCALA_VERSION` | `2.13.8` | Scala |
 | `PYTHON_VERSION` | `3.12.7` | Python |
 | `KYUUBI_VERSION` | `1.10.2` | Apache Kyuubi |
-| `JUPYTER_VERSION` | `latest` | JupyterLab |
+| `JUPYTER_VERSION` | `4.3.0` | JupyterLab (`jupyterlab==` в образе) |
 | `JAVA_VERSION` | `8` | Java (OpenJDK) |
 
 #### OpenLineage
@@ -222,6 +225,18 @@ tests\test-cluster.bat
 | OpenLineage | `tests\test-openlineage.bat` | Marquez API, трассировка Spark, метаданные |
 
 ## Ручное управление
+
+### Публикация образов в Docker Hub
+
+```bash
+# Вычислить теги (dry-run)
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\push-images.ps1 -DryRun
+
+# Tag + push всех образов (base, spark, hive-metastore, jupyter, kyuubi)
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\push-images.ps1
+```
+
+Теги вычисляются из `.env` единым скриптом `scripts/image-tags.ps1` и переиспользуются и в `scripts/push-images.ps1`, и в `start-cluster.bat`.
 
 ### Сборка образов
 
@@ -342,6 +357,8 @@ docker compose down
 docker compose build --no-cache
 docker compose up -d
 ```
+
+Если нужно принудительно игнорировать pull и пересобрать только локально, удалите локальные образы и запустите `start-cluster.bat` — скрипт автоматически пересоберет только отсутствующие.
 
 ## Полезные ссылки
 
