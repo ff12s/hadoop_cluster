@@ -11,7 +11,7 @@ $ErrorActionPreference = "Stop"
 function Read-DotEnv {
     param([string]$Path)
 
-    if (-not (Test-Path $Path)) { throw ".env not found: $Path" }
+    if (-not (Test-Path $Path)) { throw ".env not found at: $Path`nПожалуйста, создайте .env файл (скопируйте из .env.example если он есть)" }
     $map = @{}
     Get-Content $Path -Encoding UTF8 | ForEach-Object {
         $line = $_.Trim()
