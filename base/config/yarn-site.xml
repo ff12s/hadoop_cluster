@@ -112,4 +112,14 @@
         <value>604800000</value>
         <description>7 days TTL for timeline data</description>
     </property>
+
+    <!-- Log aggregation -->
+    <property>
+        <name>yarn.log-aggregation-enable</name>
+        <value>true</value>
+    </property>
+    <property>
+        <name>yarn.log-aggregation.retain-seconds</name>
+        <value>604800</value>
+    </property>
 </configuration>
