@@ -1,3 +1,28 @@
+# syntax=docker/dockerfile:1.6
+
+# =============================================================================
+# Stage 1: downloader — скачивает Kyuubi, делает chown/chmod в discarded-стейдже.
+# Главное: /opt/spark здесь НЕ трогается, чтобы не дублировать его в финальный слой.
+# =============================================================================
+FROM hadoop-cluster-spark:latest AS downloader
+
+ARG KYUUBI_VERSION
+
+USER root
+
+RUN aria2c -x 16 -s 16 --file-allocation=none -d /tmp -o kyuubi.tgz \
+        https://archive.apache.org/dist/kyuubi/kyuubi-${KYUUBI_VERSION}/apache-kyuubi-${KYUUBI_VERSION}-bin.tgz && \
+    mkdir -p /kyuubi-dist && \
+    tar -xzf /tmp/kyuubi.tgz -C /kyuubi-dist --strip-components=1 && \
+    rm -f /tmp/kyuubi.tgz && \
+    rm -rf /kyuubi-dist/docs && \
+    mkdir -p /kyuubi-dist/logs /kyuubi-dist/work /kyuubi-dist/pid && \
+    chown -R hadoop:hadoop /kyuubi-dist && \
+    chmod -R 775 /kyuubi-dist
+
+# =============================================================================
+# Stage 2: final — НЕ касаемся /opt/spark, наследуем как есть от spark-образа.
+# =============================================================================
 FROM hadoop-cluster-spark:latest
 
 ARG SPARK_VERSION
@@ -11,23 +36,15 @@ ENV PATH=$PATH:$SPARK_HOME/bin:$SPARK_HOME/sbin:$KYUUBI_HOME/bin
 
 USER root
 
-# Install Kyuubi
-RUN aria2c -x 16 -s 16 --file-allocation=none -d /tmp -o apache-kyuubi-${KYUUBI_VERSION}-bin.tgz \
-    https://archive.apache.org/dist/kyuubi/kyuubi-${KYUUBI_VERSION}/apache-kyuubi-${KYUUBI_VERSION}-bin.tgz && \
-    tar -xzf /tmp/apache-kyuubi-${KYUUBI_VERSION}-bin.tgz -C /opt && \
-    ln -s /opt/apache-kyuubi-${KYUUBI_VERSION}-bin /opt/kyuubi && \
-    rm -f /tmp/apache-kyuubi-${KYUUBI_VERSION}-bin.tgz && \
-    mkdir -p /opt/kyuubi/logs /opt/kyuubi/work /opt/kyuubi/pid && \
-    chown -R hadoop:hadoop /opt/apache-kyuubi-${KYUUBI_VERSION}-bin /opt/kyuubi /opt/spark /opt/spark* && \
-    chmod -R 775 /opt/apache-kyuubi-${KYUUBI_VERSION}-bin /opt/kyuubi
+# Только Kyuubi — один чистый слой
+COPY --from=downloader --chown=hadoop:hadoop /kyuubi-dist /opt/kyuubi
 
-# Copy config and scripts
+# Конфиги Kyuubi
 COPY config/ /opt/kyuubi/conf/
-# Исправление окончаний строк в конфигурационных файлах
 RUN find /opt/kyuubi/conf -name "*.xml" -o -name "*.sh" -o -name "*.properties" -o -name "*.conf" | xargs dos2unix
 
+# Скрипты
 COPY scripts/ /opt/scripts/
-# Исправление окончаний строк в скриптах
 RUN find /opt/scripts -name "*.sh" -type f -exec dos2unix {} \; && \
     chmod +x /opt/scripts/* && chown -R hadoop:hadoop /opt/scripts
 

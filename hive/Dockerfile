@@ -1,8 +1,59 @@
-FROM hadoop-cluster-base:latest
+# syntax=docker/dockerfile:1.6
 
-# Установка переменных окружения
+# =============================================================================
+# Stage 1: downloader — скачивает и стрипает Hive, Tez, Tez UI, PostgreSQL JDBC.
+# Результаты складываются в фиксированные пути /hive-dist, /tez-dist, /tez-ui-dist.
+# =============================================================================
+FROM hadoop-cluster-base:latest AS downloader
+
 ARG HIVE_VERSION
 ARG TEZ_VERSION
+
+USER root
+
+# Hive: стрип examples/docs + дублирующих hadoop-*.jar (в кластере используется tez.use.cluster.hadoop-libs=true)
+RUN aria2c -x 16 -s 16 --file-allocation=none -d /tmp -o hive.tar.gz \
+        https://archive.apache.org/dist/hive/hive-${HIVE_VERSION}/apache-hive-${HIVE_VERSION}-bin.tar.gz && \
+    mkdir -p /hive-dist && \
+    tar -xzf /tmp/hive.tar.gz -C /hive-dist --strip-components=1 && \
+    rm -f /tmp/hive.tar.gz && \
+    rm -rf /hive-dist/examples /hive-dist/docs && \
+    mkdir -p /hive-dist/warehouse /hive-dist/tmp /hive-dist/logs
+
+# Tez: распаковка + удаление конфликтных JAR
+RUN aria2c -x 16 -s 16 --file-allocation=none -d /tmp -o tez.tar.gz \
+        https://archive.apache.org/dist/tez/${TEZ_VERSION}/apache-tez-${TEZ_VERSION}-bin.tar.gz && \
+    mkdir -p /tez-dist/conf && \
+    tar -xzf /tmp/tez.tar.gz -C /tez-dist --strip-components=1 && \
+    rm -f /tmp/tez.tar.gz && \
+    rm -f /tez-dist/lib/hadoop-hdfs-client-*.jar \
+          /tez-dist/lib/hadoop-mapreduce-client-common-*.jar \
+          /tez-dist/lib/hadoop-mapreduce-client-core-*.jar \
+          /tez-dist/lib/hadoop-yarn-server-timeline-pluginstorage-*.jar \
+          /tez-dist/lib/protobuf-java-2.5.0.jar
+
+# Tez UI: WAR из Maven Central, распакованный
+RUN aria2c -x 16 -s 16 --file-allocation=none -d /tmp -o tez-ui.war \
+        https://repo1.maven.org/maven2/org/apache/tez/tez-ui/${TEZ_VERSION}/tez-ui-${TEZ_VERSION}.war && \
+    mkdir -p /tez-ui-dist && \
+    cd /tez-ui-dist && \
+    jar xf /tmp/tez-ui.war && \
+    rm -f /tmp/tez-ui.war
+
+# PostgreSQL JDBC драйвер кладём прямо в Hive lib
+RUN aria2c -x 16 -s 16 --file-allocation=none -d /hive-dist/lib -o postgresql-42.2.23.jar \
+        https://jdbc.postgresql.org/download/postgresql-42.2.23.jar
+
+RUN chown -R hadoop:hadoop /hive-dist /tez-dist /tez-ui-dist
+
+# =============================================================================
+# Stage 2: final
+# =============================================================================
+FROM hadoop-cluster-base:latest
+
+ARG HIVE_VERSION
+ARG TEZ_VERSION
+
 ENV HIVE_VERSION=${HIVE_VERSION}
 ENV TEZ_VERSION=${TEZ_VERSION}
 ENV HIVE_HOME=/opt/hive
@@ -11,75 +62,30 @@ ENV TEZ_CONF_DIR=$TEZ_HOME/conf
 ENV PATH=$PATH:$HIVE_HOME/bin:$HADOOP_HOME/sbin
 ENV HADOOP_CLASSPATH=$HADOOP_CONF_DIR:$HADOOP_HOME/share/hadoop/common/*:$HADOOP_HOME/share/hadoop/common/lib/*:$HADOOP_HOME/share/hadoop/hdfs/*:$HADOOP_HOME/share/hadoop/hdfs/lib/*:$TEZ_HOME/*:$TEZ_HOME/lib/*:$HIVE_HOME/lib/*
 
-# Установка PostgreSQL клиента
 USER root
-RUN apt-get update && apt-get install -y postgresql-client && rm -rf /var/lib/apt/lists/*
 
-# Скачивание и установка Hive
-RUN aria2c -x 16 -s 16 --file-allocation=none -d /tmp -o apache-hive-${HIVE_VERSION}-bin.tar.gz \
-    https://archive.apache.org/dist/hive/hive-${HIVE_VERSION}/apache-hive-${HIVE_VERSION}-bin.tar.gz && \
-    tar -xzf /tmp/apache-hive-${HIVE_VERSION}-bin.tar.gz -C /opt && \
-    mkdir -p /opt/hive && \
-    rsync -a /opt/apache-hive-${HIVE_VERSION}-bin/ /opt/hive/ && \
-    rm -rf /opt/apache-hive-${HIVE_VERSION}-bin && \
-    rm -f /tmp/apache-hive-${HIVE_VERSION}-bin.tar.gz
+# PostgreSQL клиент — нужен скриптам метастора
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        postgresql-client \
+    && rm -rf /var/lib/apt/lists/*
 
-# Скачивание PostgreSQL JDBC драйвера
-RUN aria2c -x 16 -s 16 --file-allocation=none -d /tmp -o postgresql-42.2.23.jar \
-    https://jdbc.postgresql.org/download/postgresql-42.2.23.jar && \
-    mv /tmp/postgresql-42.2.23.jar $HIVE_HOME/lib/ && \
-    chown hadoop:hadoop $HIVE_HOME/lib/postgresql-42.2.23.jar
+# Один чистый слой с готовыми Hive/Tez/Tez-UI (без тарболов и build-артефактов)
+COPY --from=downloader --chown=hadoop:hadoop /hive-dist /opt/hive
+COPY --from=downloader --chown=hadoop:hadoop /tez-dist /opt/tez
+COPY --from=downloader --chown=hadoop:hadoop /tez-ui-dist /opt/tez-ui
 
-# Скачивание и установка Apache TEZ
-RUN aria2c -x 16 -s 16 --file-allocation=none -d /tmp -o apache-tez-${TEZ_VERSION}-bin.tar.gz \
-    https://archive.apache.org/dist/tez/${TEZ_VERSION}/apache-tez-${TEZ_VERSION}-bin.tar.gz && \
-    mkdir -p /opt/tez && \
-    tar -xzf /tmp/apache-tez-${TEZ_VERSION}-bin.tar.gz -C /opt/tez --strip-components=1 && \
-    mkdir -p /opt/tez/conf && \
-    rm -f /tmp/apache-tez-${TEZ_VERSION}-bin.tar.gz
-
-# Скачивание TEZ UI WAR (не входит в бинарный дистрибутив, берём из Maven Central)
-RUN aria2c -x 16 -s 16 --file-allocation=none -d /tmp -o tez-ui.war \
-    https://repo1.maven.org/maven2/org/apache/tez/tez-ui/${TEZ_VERSION}/tez-ui-${TEZ_VERSION}.war && \
-    mkdir -p /opt/tez-ui && \
-    cd /opt/tez-ui && \
-    jar xf /tmp/tez-ui.war && \
-    rm -f /tmp/tez-ui.war && \
-    chown -R hadoop:hadoop /opt/tez-ui
-
-# Удаление конфликтных JAR из TEZ (используются библиотеки Hadoop 3.3.6 с кластера, tez.use.cluster.hadoop-libs=true)
-RUN rm -f $TEZ_HOME/lib/hadoop-hdfs-client-*.jar && \
-    rm -f $TEZ_HOME/lib/hadoop-mapreduce-client-common-*.jar && \
-    rm -f $TEZ_HOME/lib/hadoop-mapreduce-client-core-*.jar && \
-    rm -f $TEZ_HOME/lib/hadoop-yarn-server-timeline-pluginstorage-*.jar && \
-    rm -f $TEZ_HOME/lib/protobuf-java-2.5.0.jar
-
-# Создание директорий для Hive
-RUN mkdir -p /opt/hive/warehouse && \
-    mkdir -p /opt/hive/tmp && \
-    mkdir -p /opt/hive/logs && \
-    chown -R hadoop:hadoop /opt/hive && \
-    chown -R hadoop:hadoop /opt/tez
-
-# Копирование конфигурационных файлов Hive
+# Конфиги Hive
 COPY config/ $HIVE_HOME/conf/
-# Копирование tez-site.xml в конфигурацию TEZ
-RUN cp $HIVE_HOME/conf/tez-site.xml $TEZ_CONF_DIR/tez-site.xml
-# Исправление окончаний строк в конфигурационных файлах
-RUN find $HIVE_HOME/conf -name "*.xml" -o -name "*.sh" -o -name "*.properties" | xargs dos2unix && \
+RUN cp $HIVE_HOME/conf/tez-site.xml $TEZ_CONF_DIR/tez-site.xml && \
+    find $HIVE_HOME/conf -name "*.xml" -o -name "*.sh" -o -name "*.properties" | xargs dos2unix && \
     find $TEZ_CONF_DIR -name "*.xml" | xargs dos2unix
 
-# Копирование скриптов
+# Скрипты
 COPY scripts/ /opt/scripts/
-# Исправление окончаний строк в скриптах
 RUN find /opt/scripts -name "*.sh" -type f -exec dos2unix {} \; && \
     chmod +x /opt/scripts/* && chown -R hadoop:hadoop /opt/scripts
 
 USER hadoop
 WORKDIR /home/hadoop
-
-# Проверка установки Hive
-RUN ls -la $HIVE_HOME/bin && \
-    ls -la $HIVE_HOME/lib | head -5
 
 CMD ["/bin/bash"]
