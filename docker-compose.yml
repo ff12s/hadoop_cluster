@@ -50,7 +50,7 @@ services:
       retries: 20
 
   marquez:
-    image: marquezproject/marquez:latest
+    image: marquezproject/marquez:${MARQUEZ_VERSION:-0.47.0}
     container_name: hadoop-marquez
     hostname: marquez
     depends_on:
@@ -71,7 +71,7 @@ services:
       - ./marquez/config:/usr/src/app/config:ro
 
   marquez-web:
-    image: marquezproject/marquez-web:latest
+    image: marquezproject/marquez-web:${MARQUEZ_VERSION:-0.47.0}
     container_name: hadoop-marquez-web
     hostname: marquez-web
     depends_on:

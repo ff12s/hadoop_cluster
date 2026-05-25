@@ -11,6 +11,10 @@ JUPYTER_VERSION=4.3.0
 # OpenLineage / Marquez
 OPENLINEAGE_VERSION=1.37.0
 OPENLINEAGE_NAMESPACE=hadoop-cluster
+MARQUEZ_VERSION=0.47.0
 
 # Настройки Java
 JAVA_VERSION=8
+
+# Docker Hub registry для образов кластера
+REGISTRY=fufa242
