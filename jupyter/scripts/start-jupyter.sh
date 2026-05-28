@@ -1,18 +1,23 @@
-﻿#!/bin/bash
+#!/bin/bash
 set -euo pipefail
 
 echo "=== Starting JupyterLab ==="
 
-# Allow from any host (containerized)
-# Use version-agnostic absolute path
-export PYSPARK_PYTHON=/opt/python/bin/python3
-export PYSPARK_DRIVER_PYTHON=jupyter
-export PYSPARK_DRIVER_PYTHON_OPTS="lab --ip=0.0.0.0 --port=8888 --no-browser --ServerApp.token='' --ServerApp.password='' --notebook-dir=/notebooks"
-
-# Spark env
+# Spark / Hadoop env
 export SPARK_HOME=/opt/spark
 export PATH="$PATH:$SPARK_HOME/bin:$SPARK_HOME/sbin"
 export HADOOP_CONF_DIR=/opt/hadoop/etc/hadoop
+
+# Allow `from pyspark.sql import SparkSession` from a vanilla Python kernel
+# without going through the pyspark wrapper. Previously start-jupyter.sh execed
+# `pyspark` which eagerly created a SparkSession (and therefore a YARN
+# application named "PySparkShell") at kernel startup — visible in YARN UI
+# alongside the explicitly-named applications. Starting jupyter directly avoids
+# that ghost SparkContext; each notebook creates its own SparkSession on demand
+# with a meaningful appName.
+PY4J_ZIP=$(ls "$SPARK_HOME"/python/lib/py4j-*-src.zip 2>/dev/null | head -n1)
+export PYTHONPATH="$SPARK_HOME/python:${PY4J_ZIP}:${PYTHONPATH:-}"
+export PYSPARK_PYTHON=/opt/python/bin/python3
 
 # Create default notebook with spark session helper, if folder empty
 if [ -z "$(ls -A /notebooks 2>/dev/null || true)" ]; then
@@ -29,7 +34,8 @@ if [ -z "$(ls -A /notebooks 2>/dev/null || true)" ]; then
 NB
 fi
 
-# Launch PySpark which will start JupyterLab via PYSPARK_DRIVER_PYTHON_OPTS
-exec pyspark --master yarn --deploy-mode client
-
-
+# Start JupyterLab directly. Notebooks create SparkSession on demand.
+exec jupyter lab \
+  --ip=0.0.0.0 --port=8888 --no-browser \
+  --ServerApp.token='' --ServerApp.password='' \
+  --notebook-dir=/notebooks

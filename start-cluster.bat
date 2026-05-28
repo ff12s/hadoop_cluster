@@ -27,6 +27,10 @@ if not exist ".\scripts\image-tags.ps1" (
     echo ERROR: scripts\image-tags.ps1 not found. Aborting.
     exit /b 1
 )
+if not exist ".\scripts\run-stage.ps1" (
+    echo ERROR: scripts\run-stage.ps1 not found. Aborting.
+    exit /b 1
+)
 
 set "TAGS_FILE=%TEMP%\hadoop-cluster-image-tags-%RANDOM%-%RANDOM%.env"
 powershell -NoProfile -ExecutionPolicy Bypass -File ".\scripts\image-tags.ps1" -Registry "%REGISTRY%" -Format Env -EnvPath ".\.env" > "%TAGS_FILE%"
@@ -74,54 +78,75 @@ shift
 goto :parse_args
 :args_done
 
-if "%CLEAN%"=="1" (
-    echo Cleaning up volumes and pruning system...
-    %DC% down -v --remove-orphans
-    docker system prune -f
+rem ===========================================================================
+rem Logfile: every stage's stdout/stderr streams here. The spinner renderer
+rem (scripts\run-stage.ps1) reads its tail to display the in-flight step.
+rem On hard failure the caller prints the path and tails the last 30 lines.
+rem ===========================================================================
+if not exist ".\logs" mkdir ".\logs" >nul 2>nul
+for /f "usebackq tokens=*" %%T in (`powershell -NoProfile -Command "(Get-Date).ToString('yyyyMMdd-HHmmss')"`) do set "LOG_TS=%%T"
+set "LOG_FILE=.\logs\start-cluster-%LOG_TS%.log"
+> "%LOG_FILE%" echo === start-cluster.bat log %LOG_TS% ===
+echo Log file: %LOG_FILE%
+echo.
+
+if "%FORCE_BUILD%"=="1" (
+    set "TOTAL=6"
 ) else (
-    echo Stopping and cleaning up existing containers...
-    %DC% down --remove-orphans
+    set "TOTAL=5"
+)
+
+rem ===========================================================================
+rem Stage 1: stop containers (with optional --clean prune)
+rem ===========================================================================
+if "%CLEAN%"=="1" (
+    call :run_stage "[1/!TOTAL!] Stopping containers and removing volumes" "%DC% down -v --remove-orphans"
+    if errorlevel 1 exit /b 1
+    call :run_stage "[1/!TOTAL!] Pruning Docker system" "docker system prune -f"
+    if errorlevel 1 exit /b 1
+) else (
+    call :run_stage "[1/!TOTAL!] Stopping containers" "%DC% down --remove-orphans"
+    if errorlevel 1 exit /b 1
 )
 
 if "%FORCE_BUILD%"=="1" goto :force_build_all
 goto :try_pull_then_build
 
-:force_build_all
-echo --build specified: building all images from scratch...
+rem ===========================================================================
+rem Path B (--build): three build stages, each with its own spinner.
 rem Dependency graph:
-rem   stage 1: base
-rem   stage 2: spark-image, hive-metastore  (both FROM base, run in parallel)
-rem   stage 3: jupyter, kyuubi              (both FROM spark, run in parallel)
+rem   stage 2: base
+rem   stage 3: spark-image, hive-metastore  (both FROM base, run in parallel)
+rem   stage 4: jupyter, kyuubi              (both FROM spark, run in parallel)
 rem No --pull: local FROM images (hadoop-cluster-base/spark) are not in any registry.
-
-echo.
-echo [stage 1/3] Building: base
-%DC% build base
-if errorlevel 1 (
-    echo ERROR: [stage 1/3] build failed: base
-    exit /b 1
-)
-
-echo.
-echo [stage 2/3] Building in parallel: spark-image hive-metastore
-%DC% build spark-image hive-metastore
-if errorlevel 1 (
-    echo ERROR: [stage 2/3] build failed: spark-image hive-metastore
-    exit /b 1
-)
-
-echo.
-echo [stage 3/3] Building in parallel: jupyter kyuubi
-%DC% build jupyter kyuubi
-if errorlevel 1 (
-    echo ERROR: [stage 3/3] build failed: jupyter kyuubi
-    exit /b 1
-)
-
+rem ===========================================================================
+:force_build_all
+call :run_stage "[2/!TOTAL!] Building base" "%DC% build base"
+if errorlevel 1 exit /b 1
+rem `docker compose` v2 builds independent services in parallel by default and
+rem does not expose --parallel in its help; v1 needed it explicitly but is
+rem deprecated, and on modern Docker Desktop the `docker-compose` binary is just
+rem a v2 shim. We never pass --parallel - it's redundant where supported and
+rem not accepted by current versions where it isn't.
+call :run_stage "[3/!TOTAL!] Building spark-image, hive-metastore" "%DC% build spark-image hive-metastore"
+if errorlevel 1 exit /b 1
+call :run_stage "[4/!TOTAL!] Building jupyter, kyuubi" "%DC% build jupyter kyuubi"
+if errorlevel 1 exit /b 1
 goto :verify_images
 
+rem ===========================================================================
+rem Path A (default): pull prebuilt images from Docker Hub, build only the ones
+rem that failed to pull. Each pull gets its own spinner; failures fall back to
+rem the build queue silently (no tail of log).
+rem
+rem Note: this stage intentionally breaks the "one spinner per stage" pattern -
+rem during a multi-minute pull of 5 images, per-image visibility is more useful
+rem than a single line that just says "Pulling images". The build path elsewhere
+rem stays one-spinner-per-stage.
+rem ===========================================================================
 :try_pull_then_build
-echo Trying to pull prebuilt images from Docker Hub...
+echo.
+echo [2/!TOTAL!] Pulling images from Docker Hub
 call :pull_or_mark base "%BASE_REMOTE%" "%BASE_IMAGE%"
 call :pull_or_mark spark-image "%SPARK_REMOTE%" "%SPARK_IMAGE%"
 call :pull_or_mark hive-metastore "%HIVE_REMOTE%" "%HIVE_IMAGE%"
@@ -129,49 +154,49 @@ call :pull_or_mark jupyter "%JUPYTER_REMOTE%" "%JUPYTER_IMAGE%"
 call :pull_or_mark kyuubi "%KYUUBI_REMOTE%" "%KYUUBI_IMAGE%"
 
 if defined BUILD_SERVICES (
-    echo Building missing images: !BUILD_SERVICES!
-    %DC% build !BUILD_SERVICES!
-    if errorlevel 1 (
-        echo ERROR: Failed to build missing images. Aborting.
-        exit /b 1
-    )
+    call :run_stage "[3/!TOTAL!] Building missing images: !BUILD_SERVICES!" "%DC% build !BUILD_SERVICES!"
+    if errorlevel 1 exit /b 1
 ) else (
-    echo All required images were pulled successfully.
+    echo.
+    echo [3/!TOTAL!] Build skipped - all images pulled.
+    >> "%LOG_FILE%" echo [3/!TOTAL!] Build skipped - all images pulled.
 )
 
 :verify_images
 rem Sanity-check that all required local image tags exist before 'up -d --no-build'.
 rem Catches drift if image-tags.ps1 ever stops aligning BASE_IMAGE/etc. with the
 rem hardcoded FROM in child Dockerfiles.
+<nul set /p "_=Verifying image tags... "
+set "VERIFY_FAIL=0"
 for %%I in ("%BASE_IMAGE%" "%SPARK_IMAGE%" "%HIVE_IMAGE%" "%JUPYTER_IMAGE%" "%KYUUBI_IMAGE%") do (
-    docker image inspect %%I >nul 2>nul
+    docker image inspect %%I >> "%LOG_FILE%" 2>&1
     if errorlevel 1 (
-        echo ERROR: required image %%I not found locally after build/pull. Aborting.
-        exit /b 1
+        set "VERIFY_FAIL=1"
+        >> "%LOG_FILE%" echo MISSING IMAGE: %%I
     )
 )
-
-:after_images
-echo Starting cluster...
-%DC% up -d --no-build
-if errorlevel 1 (
-    echo ERROR: '%DC% up' failed. Cluster not started.
+if "!VERIFY_FAIL!"=="1" (
+    echo FAILED
+    echo One or more required local images are missing.
+    call :fail_with_log
     exit /b 1
 )
+echo OK
 
-echo Checking HDFS health...
-docker exec %NAMENODE_CONTAINER% /opt/scripts/check-hdfs.sh
-if errorlevel 1 (
-    echo ERROR: HDFS health check failed.
-    exit /b 1
-)
+rem ===========================================================================
+rem Stage N-1: start services
+rem ===========================================================================
+set /a "STAGE_UP=TOTAL - 1"
+call :run_stage "[!STAGE_UP!/!TOTAL!] Starting services" "%DC% up -d --no-build"
+if errorlevel 1 exit /b 1
 
-echo Checking Hive health...
-docker exec %HIVESERVER2_CONTAINER% /opt/scripts/check-hive.sh
-if errorlevel 1 (
-    echo ERROR: Hive health check failed.
-    exit /b 1
-)
+rem ===========================================================================
+rem Stage N: health checks (HDFS + Hive share the final stage index)
+rem ===========================================================================
+call :run_stage "[!TOTAL!/!TOTAL!] Health check: HDFS" "docker exec %NAMENODE_CONTAINER% /opt/scripts/check-hdfs.sh"
+if errorlevel 1 exit /b 1
+call :run_stage "[!TOTAL!/!TOTAL!] Health check: Hive" "docker exec %HIVESERVER2_CONTAINER% /opt/scripts/check-hive.sh"
+if errorlevel 1 exit /b 1
 
 echo.
 echo Cluster started successfully!
@@ -195,6 +220,10 @@ echo - YARN tests:        .\tests\test-yarn.bat
 echo - Full cluster test: .\tests\test-cluster.bat
 exit /b 0
 
+rem ===========================================================================
+rem Helpers
+rem ===========================================================================
+
 :show_help
 set "HELP_EXIT=0"
 goto :print_help
@@ -215,30 +244,52 @@ echo   start-cluster.bat                  Pull prebuilt images, build only missi
 echo   start-cluster.bat --clean          Wipe volumes, then pull/build as usual.
 echo   start-cluster.bat --build          Rebuild everything from scratch (no pulling).
 echo   start-cluster.bat --clean --build  Wipe volumes and rebuild everything.
+echo.
+echo Logs: full stdout/stderr of every stage goes to .\logs\start-cluster-*.log
 exit /b %HELP_EXIT%
 
 :pull_or_mark
+rem %~1 = service name, %~2 = remote tag, %~3 = local tag.
+rem Soft-fail mode: -NoTailOnFail keeps the screen clean when a pull misses and
+rem we silently fall back to building. The build stage still produces a proper
+rem failure dump if it can't recover.
+>> "%LOG_FILE%" echo === STAGE: pull %~1 === %TIME%
+powershell -NoProfile -ExecutionPolicy Bypass -File ".\scripts\run-stage.ps1" -Label "   %~1" -LogFile "%LOG_FILE%" -Command "docker pull %~2" -NoTailOnFail
+if errorlevel 1 (
+    if defined BUILD_SERVICES (
+        set "BUILD_SERVICES=!BUILD_SERVICES! %~1"
+    ) else (
+        set "BUILD_SERVICES=%~1"
+    )
+    exit /b 0
+)
+docker tag %~2 %~3 >> "%LOG_FILE%" 2>&1
+if errorlevel 1 (
+    echo    %~1: tag step failed, will rebuild locally
+    if defined BUILD_SERVICES (
+        set "BUILD_SERVICES=!BUILD_SERVICES! %~1"
+    ) else (
+        set "BUILD_SERVICES=%~1"
+    )
+    exit /b 0
+)
+exit /b 0
+
+:run_stage
+rem %~1 = stage label, %~2 = single command string.
+rem Writes a stage marker to the log here (in cmd's OEM encoding, matching the
+rem encoding of the docker output that follows), then delegates to run-stage.ps1
+rem which streams the command's stdout/stderr to %LOG_FILE% and draws a single
+rem in-place spinner with the current step extracted from the log tail. On
+rem failure the helper prints the log tail itself.
+>> "%LOG_FILE%" echo === STAGE: %~1 === %TIME%
+powershell -NoProfile -ExecutionPolicy Bypass -File ".\scripts\run-stage.ps1" -Label "%~1" -LogFile "%LOG_FILE%" -Command "%~2"
+exit /b %errorlevel%
+
+:fail_with_log
 echo.
-echo Service %~1: pulling %~2
-docker pull %~2
-if errorlevel 1 (
-    echo Image not found or pull failed, will build service %~1
-    if defined BUILD_SERVICES (
-        set "BUILD_SERVICES=!BUILD_SERVICES! %~1"
-    ) else (
-        set "BUILD_SERVICES=%~1"
-    )
-    exit /b 0
-)
-docker tag %~2 %~3
-if errorlevel 1 (
-    echo Failed to tag %~2 as %~3, will build service %~1
-    if defined BUILD_SERVICES (
-        set "BUILD_SERVICES=!BUILD_SERVICES! %~1"
-    ) else (
-        set "BUILD_SERVICES=%~1"
-    )
-    exit /b 0
-)
-echo Using pulled image for %~1
+echo See %LOG_FILE% for details. Last 30 lines:
+echo ----------------------------------------
+powershell -NoProfile -Command "[Console]::OutputEncoding=[Text.Encoding]::UTF8; Get-Content -Tail 30 -Encoding UTF8 -Path '%LOG_FILE%'"
+echo ----------------------------------------
 exit /b 0

@@ -11,3 +11,4 @@
 .env.test.local
 sparketl/
 .claude/
+logs/
