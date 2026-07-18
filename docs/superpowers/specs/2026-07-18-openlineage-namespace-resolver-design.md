@@ -174,7 +174,7 @@ openlineage-namespace-resolver/
 - **`.gitignore`** — добавить `spark/jars/` (собранный артефакт не коммитим).
 - **README-заметка** (в `hadoop_cluster/README.md` или отдельный файл) — как собрать jar в соседнем проекте и
   положить/примонтировать в стенд.
-- **Тест-скрипт** (например `tests/test-namespace-resolver.*`) — собрать jar → перезапустить spark-сервис →
+- **Тест-скрипт** `tests/test-namespace-resolver.sh` (bash) — собрать jar → перезапустить spark-сервис →
   прогнать существующий lineage-ноутбук/джобу → проверить, что OL-события по-прежнему принимаются Marquez (нет
   регрессии) и `GET /api/v1/namespaces` = 200.
 
