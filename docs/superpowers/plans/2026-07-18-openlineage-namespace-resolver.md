@@ -321,7 +321,7 @@ public class NamespaceNormalizer implements DatasetNamespaceResolver {
 ```bash
 cd E:/work/pycharm/1642_119_SparkAPI/openlineage-namespace-resolver && bash mvnd.sh -q test
 ```
-Expected: PASS — `NamespaceNormalizerTest` весь зелёный (9 тестов).
+Expected: PASS — `NamespaceNormalizerTest` весь зелёный (10 тестов).
 
 - [ ] **Step 8: Инициализировать git и закоммитить**
 
@@ -509,7 +509,7 @@ _Примечание для реализатора: шаги 1–3 создаю
 ```bash
 cd E:/work/pycharm/1642_119_SparkAPI/openlineage-namespace-resolver && bash mvnd.sh -q test
 ```
-Expected: PASS — `NamespaceNormalizerTest` (9) + `ResolverLoadingTest` (1) зелёные.
+Expected: PASS — `NamespaceNormalizerTest` (10) + `ResolverLoadingTest` (2) зелёные (12 всего).
 
 _Если `ResolverLoadingTest` падает с ошибкой про абстрактные методы `MergeConfig` — значит в 1.46.0 у `MergeConfig` есть ещё абстрактные методы; реализовать их (по грундингу абстрактен только `mergeWithNonNull`, так что этого быть не должно). Это ожидаемая точка, где грундинг проверяется эмпирически._
 
