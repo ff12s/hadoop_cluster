@@ -167,10 +167,14 @@ openlineage-namespace-resolver/
   ```
   Путь конфигурируем через env `OL_RESOLVER_JAR` (по умолчанию `./spark/jars/...`); для быстрого цикла можно
   указать на `../openlineage-namespace-resolver/target/openlineage-namespace-resolver-0.1.0.jar`.
-- **`spark/config/spark-defaults.conf`** — включить резолвер:
-  ```
-  spark.openlineage.dataset.namespaceResolvers.default.type   normalize
-  ```
+- **Активация резолвера — только на время e2e-теста, НЕ в коммитнутом `spark-defaults.conf`.** Строка
+  `spark.openlineage.dataset.namespaceResolvers.default.type   normalize` намеренно НЕ добавляется во
+  всегда-включённый `spark-defaults.conf`: иначе стенд ссылается на тип резолвера, чей jar в `.gitignore` и
+  может отсутствовать на свежем чекауте, а неизвестный тип у OpenLineage приводит к
+  `orElseThrow(OpenLineageClientException)` при разборе конфига (риск сломать lineage для всех джоб стенда).
+  Вместо этого e2e-тест активирует резолвер на один прогон через per-run `SPARK_CONF_DIR`: копирует штатный
+  conf, дописывает строку резолвера в копию и запускает ноутбук с `SPARK_CONF_DIR`, указывающим на неё. Штатный
+  `spark-defaults.conf` остаётся без резолвера — обычные джобы стенда от наличия jar не зависят.
 - **`.gitignore`** — добавить `spark/jars/` (собранный артефакт не коммитим).
 - **README-заметка** (в `hadoop_cluster/README.md` или отдельный файл) — как собрать jar в соседнем проекте и
   положить/примонтировать в стенд.

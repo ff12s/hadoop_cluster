@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # e2e-проверка кастомного namespace-резолвера на локальном стенде.
-# Собирает jar, монтирует его в jupyter, прогоняет lineage-ноутбук, проверяет,
-# что резолвер загрузился и Marquez остался цел. Пропускается, если стек не поднят.
+# Собирает jar, монтирует его в jupyter, прогоняет lineage-ноутбук с резолвером,
+# включённым ТОЛЬКО на время прогона (per-run SPARK_CONF_DIR — коммитнутый
+# spark-defaults.conf резолвер не активирует, чтобы обычные джобы стенда не
+# зависели от наличия jar). Проверяет, что резолвер загрузился и Marquez остался
+# цел. Пропускается, если стек не поднят.
 set -uo pipefail
 
 RESOLVER_DIR="$(cd "$(dirname "$0")/../../openlineage-namespace-resolver" && pwd)"
@@ -33,10 +36,16 @@ for i in $(seq 1 12); do
   sleep 5
 done
 
-echo "== 4) Прогон lineage-ноутбука =="
-docker exec hadoop-jupyter bash -lc \
-  'jupyter nbconvert --to notebook --execute --output /tmp/ns_out.ipynb /notebooks/lineage/00_setup.ipynb' \
-  || { echo "ПРОГОН НОУТБУКА УПАЛ (нужен поднятый YARN/HDFS)"; exit 1; }
+echo "== 4) Прогон lineage-ноутбука с резолвером, включённым только на этот прогон =="
+# Резолвер активируется через per-run SPARK_CONF_DIR: копируем штатный conf,
+# дописываем строку резолвера туда, коммитнутый spark-defaults.conf не трогаем.
+docker exec hadoop-jupyter bash -lc '
+  set -e
+  mkdir -p /tmp/olconf
+  cp /opt/spark/conf/* /tmp/olconf/ 2>/dev/null || true
+  echo "spark.openlineage.dataset.namespaceResolvers.default.type normalize" >> /tmp/olconf/spark-defaults.conf
+  SPARK_CONF_DIR=/tmp/olconf jupyter nbconvert --to notebook --execute --output /tmp/ns_out.ipynb /notebooks/lineage/00_setup.ipynb
+' || { echo "ПРОГОН НОУТБУКА УПАЛ (нужен поднятый YARN/HDFS)"; exit 1; }
 
 echo "== 5) Проверка: резолвер активен в логах драйвера =="
 if docker logs hadoop-jupyter 2>&1 | grep -q "NamespaceNormalizer active"; then
