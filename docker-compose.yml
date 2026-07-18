@@ -214,6 +214,7 @@ services:
       - ./hive/config/hive-site.xml:/opt/spark/conf/hive-site.xml:ro
       - ./spark/config/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf:ro
       - ./spark/config/log4j.properties:/opt/spark/conf/log4j.properties:ro
+      - ${OL_RESOLVER_JAR:-./spark/jars/openlineage-namespace-resolver.jar}:/opt/spark/jars/openlineage-namespace-resolver.jar:ro
     depends_on:
       - namenode
       - datanode
