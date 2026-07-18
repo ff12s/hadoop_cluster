@@ -35,7 +35,7 @@
 
 **Reuse ladder:** прежде чем писать новый код, искать в порядке: этот репозиторий → стандартная библиотека → возможность платформы/рантайма → зависимость уже в манифесте. Переиспользовать найденное только после прочтения и проверки, что оно делает нужное. Писать своё только если подходящего нет. Если задача требует зависимость, которой нет в манифесте, — остановиться и сообщить, а не добавлять.
 
-**Канонический запуск Maven (Git Bash).** Задача 1 создаёт обёртку `mvnd.sh`; все maven-шаги зовут `bash mvnd.sh <goals>` из корня standalone-проекта. Первый запуск тянет образ `maven:3.9-eclipse-temurin-8` (~500 МБ) — это нормально. Если такого тега нет, использовать `maven:3-eclipse-temurin-8`.
+**Канонический запуск Maven (Git Bash).** Задача 1 создаёт обёртку `mvnd.sh`; все maven-шаги зовут `bash mvnd.sh <goals>` из корня standalone-проекта. Обёртка предпочитает **хостовый `mvn`**, если он в PATH (на этой машине Maven 3.9.16 + Corretto JDK 8 доступны), и падает обратно на Maven-в-Docker (`maven:3.9-eclipse-temurin-8`), только если хостового `mvn` нет. Так сборка работает без запущенного Docker Desktop.
 
 ---
 
@@ -122,13 +122,17 @@ target/
 
 ```bash
 #!/usr/bin/env bash
-# Dev-обёртка: гоняет Maven в Docker, чтобы не требовать хостовый JDK/Maven.
-# Кэш зависимостей — в локальном .m2 (в .gitignore).
+# Dev-обёртка Maven. Предпочитает хостовый mvn (если он в PATH); иначе гоняет
+# Maven в Docker, чтобы не требовать хостовый JDK/Maven. Кэш зависимостей
+# Docker-режима — в локальном .m2 (в .gitignore).
 set -euo pipefail
-export MSYS_NO_PATHCONV=1
 DIR="$(cd "$(dirname "$0")" && pwd)"
+if command -v mvn >/dev/null 2>&1; then
+  exec mvn "$@"
+fi
+export MSYS_NO_PATHCONV=1
 mkdir -p "$DIR/.m2"
-docker run --rm \
+exec docker run --rm \
   -v "$DIR":/w -v "$DIR/.m2":/root/.m2 -w /w \
   maven:3.9-eclipse-temurin-8 mvn "$@"
 ```
@@ -513,10 +517,9 @@ _Если `ResolverLoadingTest` падает с ошибкой про абстр
 
 ```bash
 cd E:/work/pycharm/1642_119_SparkAPI/openlineage-namespace-resolver && bash mvnd.sh -q -DskipTests package
-export MSYS_NO_PATHCONV=1
-docker run --rm -v "E:/work/pycharm/1642_119_SparkAPI/openlineage-namespace-resolver":/w -w /w \
-  maven:3.9-eclipse-temurin-8 jar tf target/openlineage-namespace-resolver-0.1.0.jar
+jar tf target/openlineage-namespace-resolver-0.1.0.jar
 ```
+(`jar` входит в JDK; если хостового `jar` нет — `unzip -l target/*.jar`.)
 Expected: в jar есть 3 класса `io/dapp/openlineage/resolver/*.class` + `META-INF/services/io.openlineage.client...DatasetNamespaceResolverBuilder`; НЕТ классов `io/openlineage/*` (provided не забандлен).
 
 - [ ] **Step 8: Создать `README.md`**
