@@ -44,6 +44,18 @@ ENV HADOOP_HOME=/opt/hadoop
 ENV HADOOP_CONF_DIR=/opt/hadoop/etc/hadoop
 ENV PATH=$JAVA_HOME/bin:$SPARK_HOME/bin:$HADOOP_HOME/bin:$PATH
 
+# /etc/profile у Debian безусловно переписывает PATH для непривилегированных пользователей —
+# ENV PATH из образа теряется в login-шеллах (bash -l/-lc), хотя корректно применяется к
+# exec-процессам контейнера (тем, что реально запускает SparkSubmitOperator). Восстанавливаем
+# те же пути через profile.d, чтобы `docker exec ... bash -l` тоже видел spark-submit/yarn/java.
+RUN { \
+        echo "export JAVA_HOME=$JAVA_HOME"; \
+        echo "export SPARK_HOME=$SPARK_HOME"; \
+        echo "export HADOOP_HOME=$HADOOP_HOME"; \
+        echo "export HADOOP_CONF_DIR=$HADOOP_CONF_DIR"; \
+        echo 'export PATH="$JAVA_HOME/bin:$SPARK_HOME/bin:$HADOOP_HOME/bin:$PATH"'; \
+    } > /etc/profile.d/hadoop-cluster-path.sh
+
 USER airflow
 
 # Версия провайдера выбирается constraints-файлом соответствующей версии Airflow
