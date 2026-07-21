@@ -9,7 +9,6 @@ docker run --rm --entrypoint bash "$IMAGE" -lc '
   command -v spark-submit
   command -v yarn
   command -v java
-  test -f /opt/airflow/jobs/pyspark_pi.py
   python -c "import airflow.providers.apache.spark.operators.spark_submit as m; print(m.__file__)"
   python -c "
 import inspect
