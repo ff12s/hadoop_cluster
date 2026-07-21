@@ -14,6 +14,14 @@ db:
   url: jdbc:postgresql://marquez-db:5432/marquez
   user: marquez
   password: marquez
+  # При 2 подах Marquez с maxSize=10 худший случай — 20 соединений суммарно,
+  # что заметно меньше max_connections=100 по умолчанию в Postgres и оставляет
+  # запас для других клиентов (psql, прочие сервисы)
+  minSize: 2
+  maxSize: 10
+  initialSize: 2
+  checkConnectionOnBorrow: true
+  maxWaitForConnection: 5s
 
 # Run DB migrations on startup
 migrateOnStartup: true
