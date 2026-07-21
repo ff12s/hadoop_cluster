@@ -9,6 +9,20 @@ TEZ_VERSION=0.10.2
 JUPYTER_VERSION=4.3.0
 AIRFLOW_VERSION=2.6.3
 
+# Airflow. Значения по умолчанию заданы в docker-compose.yml, здесь перечислены
+# точки переопределения: раскомментируйте нужную строку и задайте своё значение.
+# Пароль роли метаданных подставляется в URI подключения как есть, поэтому
+# символы @ : / # ? в нём использовать нельзя.
+#AIRFLOW_DB_USER=airflow
+#AIRFLOW_DB_PASSWORD=airflow
+#AIRFLOW_DB_NAME=airflow
+# Учётка UI создаётся один раз, при первичной инициализации метаданных.
+#AIRFLOW_ADMIN_USER=admin
+#AIRFLOW_ADMIN_PASSWORD=admin
+# Пустой ключ = секреты Connection'ов и Variable лежат в базе открытым текстом.
+# Сгенерировать: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+#AIRFLOW_FERNET_KEY=
+
 # OpenLineage / Marquez
 OPENLINEAGE_VERSION=1.46.0
 OPENLINEAGE_NAMESPACE=hadoop-cluster

@@ -8,18 +8,16 @@ python /opt/airflow/scripts/ensure_db.py
 echo "[init] накатываем схему (в 2.6.x команда называется db init, не migrate)"
 airflow db init
 
-ADMIN_USER="${AIRFLOW_ADMIN_USER:-admin}"
-if airflow users list --output plain | awk 'NR>1 {print $2}' | grep -Fxq "${ADMIN_USER}"; then
-    echo "[init] пользователь ${ADMIN_USER} уже существует"
-else
-    echo "[init] создаём пользователя ${ADMIN_USER}"
-    airflow users create \
-        --username "${ADMIN_USER}" \
-        --password "${AIRFLOW_ADMIN_PASSWORD:-admin}" \
-        --firstname Air \
-        --lastname Flow \
-        --role Admin \
-        --email admin@example.com
-fi
+# users create идемпотентна: на существующем пользователе печатает "already exist
+# in the db" и завершается нулём, пароль при этом не меняет.
+# Пароль подаётся в stdin (без --password): argv процесса виден всему контейнеру.
+echo "[init] создаём пользователя ${AIRFLOW_ADMIN_USER:-admin}"
+admin_password="${AIRFLOW_ADMIN_PASSWORD:-admin}"
+printf '%s\n%s\n' "${admin_password}" "${admin_password}" | airflow users create \
+    --username "${AIRFLOW_ADMIN_USER:-admin}" \
+    --firstname Air \
+    --lastname Flow \
+    --role Admin \
+    --email admin@example.com
 
 echo "[init] готово"

@@ -1,6 +1,7 @@
 # syntax=docker/dockerfile:1.6
 
-ARG AIRFLOW_VERSION
+# Дефолт нужен для сборки без compose: иначе тег развернулся бы в ":-python3.10"
+ARG AIRFLOW_VERSION=2.6.3
 
 # =============================================================================
 # Донорские стейджи: готовые дистрибутивы из образов стенда, без повторной загрузки.
@@ -10,11 +11,12 @@ FROM hadoop-cluster-base:latest AS hadoopdist
 
 # =============================================================================
 # Финальный образ. Python 3.10 пинуется явно: безсуффиксный тег даёт
-# «новейший Python на момент релиза» — значение неоднозначно.
+# «новейший Python на момент релиза» — значение неоднозначно. Суффикс -python3.10
+# менять только вместе с constraints-3.10.txt в pip-шаге ниже.
 # =============================================================================
 FROM apache/airflow:${AIRFLOW_VERSION}-python3.10
 
-ARG AIRFLOW_VERSION
+ARG AIRFLOW_VERSION=2.6.3
 ENV AIRFLOW_VERSION=${AIRFLOW_VERSION}
 
 USER root
@@ -29,11 +31,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=sparkdist --chown=airflow:root /opt/spark /opt/spark
 COPY --from=hadoopdist --chown=airflow:root /opt/hadoop /opt/hadoop
 
-COPY --chown=airflow:root jobs/ /opt/airflow/jobs/
+# Джобы в образ не копируются: compose монтирует ./airflow/jobs в /opt/airflow/jobs
+# и каталог-маунт всё равно перекрыл бы встроенную копию.
 COPY --chown=airflow:root scripts/ /opt/airflow/scripts/
 
-# chmod через -exec, а не отдельным *.sh-глобом: в Task 1 каталог scripts/
-# пуст (только .gitkeep) — глоб без совпадений упал бы с "No such file or directory"
+# find -exec, а не *.sh-глоб: устойчиво к пустому каталогу
 RUN find /opt/airflow/scripts -name "*.sh" -type f -exec sed -i 's/\r$//' {} \; -exec chmod +x {} \;
 
 ENV JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64

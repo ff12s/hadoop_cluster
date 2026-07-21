@@ -14,6 +14,42 @@ x-versions: &versions
   OPENLINEAGE_NAMESPACE: ${OPENLINEAGE_NAMESPACE}
   JAVA_VERSION: ${JAVA_VERSION}
 
+# Окружение, общее для всех сервисов Airflow. Креды суперпользователя Postgres и
+# учётка UI сюда не входят: они нужны только одноразовому airflow-init.
+x-airflow-env: &airflow-env
+  <<: *versions
+  # Параметры роли метаданных — единственный источник и для DDL (ensure_db.py),
+  # и для строки подключения Airflow ниже.
+  AIRFLOW_DB_HOST: ${AIRFLOW_DB_HOST:-postgres}
+  AIRFLOW_DB_PORT: "${AIRFLOW_DB_PORT:-5432}"
+  AIRFLOW_DB_USER: ${AIRFLOW_DB_USER:-airflow}
+  AIRFLOW_DB_PASSWORD: ${AIRFLOW_DB_PASSWORD:-airflow}
+  AIRFLOW_DB_NAME: ${AIRFLOW_DB_NAME:-airflow}
+  AIRFLOW__CORE__EXECUTOR: LocalExecutor
+  AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${AIRFLOW_DB_USER:-airflow}:${AIRFLOW_DB_PASSWORD:-airflow}@${AIRFLOW_DB_HOST:-postgres}:${AIRFLOW_DB_PORT:-5432}/${AIRFLOW_DB_NAME:-airflow}
+  AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+  AIRFLOW__DATABASE__LOAD_DEFAULT_CONNECTIONS: "false"
+  AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
+  # Пустой ключ = NullFernet: секреты Connection'ов и Variable лежат в БД
+  # открытым текстом. Для реальных кредов задайте AIRFLOW_FERNET_KEY в .env.
+  AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY:-}
+  AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: "true"
+  # Коннекшен spark_yarn задаётся переменной окружения, поэтому в UI он не виден
+  # и одноимённый коннекшен, созданный через UI, не применяется.
+  AIRFLOW_CONN_SPARK_YARN: "spark://yarn?deploy-mode=cluster&spark-binary=spark-submit"
+  HADOOP_USER_NAME: hadoop
+  HADOOP_CONF_DIR: /opt/hadoop/etc/hadoop
+  SPARK_HOME: /opt/spark
+
+x-airflow-volumes: &airflow-volumes
+  - ./airflow/dags:/opt/airflow/dags
+  - ./airflow/jobs:/opt/airflow/jobs
+  - ./spark/scripts/pyspark_pi.py:/opt/airflow/jobs/pyspark_pi.py:ro
+  - ./airflow/logs:/opt/airflow/logs
+  - ./hive/config/hive-site.xml:/opt/spark/conf/hive-site.xml:ro
+  - ./spark/config/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf:ro
+  - ./spark/config/log4j.properties:/opt/spark/conf/log4j.properties:ro
+
 services:
   base:
     build:
@@ -106,6 +142,12 @@ services:
       - postgres-data:/var/lib/postgresql/data
     ports:
       - "5434:5432"  # Hive Metastore PostgreSQL (non-default port to avoid conflicts)
+    healthcheck:
+      # -h 127.0.0.1 форсирует TCP: во время initdb сервер слушает только unix-сокет
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U hive -d hive_metastore"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
 
   namenode:
     image: ${BASE_IMAGE:-hadoop-cluster-base:latest}
@@ -234,28 +276,21 @@ services:
     container_name: hadoop-airflow-init
     hostname: airflow-init
     depends_on:
-      - postgres
-    environment: &airflow-env
-      <<: *versions
-      AIRFLOW__CORE__EXECUTOR: LocalExecutor
-      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
-      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
-      AIRFLOW__DATABASE__LOAD_DEFAULT_CONNECTIONS: "false"
-      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
-      AIRFLOW__CORE__FERNET_KEY: ""
-      AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: "true"
-      AIRFLOW_CONN_SPARK_YARN: "spark://yarn?deploy-mode=cluster&spark-binary=spark-submit"
-      HADOOP_USER_NAME: hadoop
-      HADOOP_CONF_DIR: /opt/hadoop/etc/hadoop
-      SPARK_HOME: /opt/spark
-    volumes: &airflow-volumes
-      - ./airflow/dags:/opt/airflow/dags
-      - ./airflow/jobs:/opt/airflow/jobs
-      - ./spark/scripts/pyspark_pi.py:/opt/airflow/jobs/pyspark_pi.py:ro
-      - ./airflow/logs:/opt/airflow/logs
-      - ./hive/config/hive-site.xml:/opt/spark/conf/hive-site.xml:ro
-      - ./spark/config/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf:ro
-      - ./spark/config/log4j.properties:/opt/spark/conf/log4j.properties:ro
+      postgres:
+        condition: service_healthy
+    environment:
+      <<: *airflow-env
+      # Суперпользователь, от имени которого создаются роль и база; значения обязаны
+      # совпадать с POSTGRES_* сервиса postgres (их же использует hive-site.xml).
+      # Живут только здесь: долгоживущим сервисам Airflow они не нужны.
+      AIRFLOW_DB_ADMIN_USER: hive
+      AIRFLOW_DB_ADMIN_PASSWORD: hive
+      AIRFLOW_DB_ADMIN_DB: hive_metastore
+      # Учётка UI создаётся один раз при первичной инициализации; стенд рассчитан
+      # только на локальный запуск, дефолтный admin/admin наружу публиковать нельзя.
+      AIRFLOW_ADMIN_USER: ${AIRFLOW_ADMIN_USER:-admin}
+      AIRFLOW_ADMIN_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD:-admin}
+    volumes: *airflow-volumes
     entrypoint: ["/opt/airflow/scripts/init-airflow.sh"]
     restart: "no"
 

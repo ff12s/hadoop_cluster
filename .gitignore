@@ -15,6 +15,7 @@ logs/
 !airflow/logs/
 .mcp.json
 __pycache__/
+*.log
 
 # Собранный resolver-jar монтируется в стенд, но не коммитится
 spark/jars/*.jar
