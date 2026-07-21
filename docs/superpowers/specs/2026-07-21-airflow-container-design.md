@@ -38,6 +38,7 @@ Marquez 0.47.0 одним `docker-compose.yml`. Spark-джобы уже отпр
 | Официальный compose 2.6.3: `airflow-init` инициализирует БД + создаёт админа; `AIRFLOW__CORE__EXECUTOR`, `AIRFLOW__DATABASE__SQL_ALCHEMY_CONN`, `AIRFLOW__CORE__LOAD_EXAMPLES`, `AIRFLOW__CORE__FERNET_KEY`, `AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK`; healthcheck `curl --fail http://localhost:8080/health` (webserver) и `:8974/health` (scheduler); volume'ы `./dags ./logs ./config ./plugins`; `AIRFLOW_UID` по умолчанию 50000 | airflow.apache.org/docs/apache-airflow/2.6.3/docker-compose.yaml |
 | `_PIP_ADDITIONAL_REQUIREMENTS` ставит пакеты при **каждом** старте контейнера — официально не для продакшена, вместо него собственный образ | там же |
 | Redis/Celery/worker/flower нужны только для CeleryExecutor | там же |
+| `load_default_connections` в секции `[core]` депрекирована с 2.3.0 и переехала в `[database]` → ENV `AIRFLOW__DATABASE__LOAD_DEFAULT_CONNECTIONS` | airflow.apache.org/docs/apache-airflow/2.6.3/configurations-ref.html |
 
 ## 3. Образ `airflow/Dockerfile`
 
@@ -53,7 +54,6 @@ USER root
 #  Spark 3.5 официально поддерживает Java 8/11/17
 COPY --from=sparkdist  /opt/spark          /opt/spark
 COPY --from=hadoopdist /opt/hadoop         /opt/hadoop
-COPY --from=sparkdist  /opt/scripts/pyspark_pi.py /opt/airflow/jobs/pyspark_pi.py
 COPY jobs/ /opt/airflow/jobs/
 USER airflow
 RUN pip install --no-cache-dir apache-airflow-providers-apache-spark \
@@ -63,7 +63,9 @@ RUN pip install --no-cache-dir apache-airflow-providers-apache-spark \
 Версия провайдера **не хардкодится**: её выбирает constraints-файл соответствующей версии Airflow (для 2.6.3 —
 `4.1.1`). Это сохраняет честную параметризацию по `AIRFLOW_VERSION`.
 
-`pyspark_pi.py` переиспользуется из spark-образа, а не пишется заново.
+`pyspark_pi.py` переиспользуется — единственный оригинал `spark/scripts/pyspark_pi.py` монтируется read-only
+в `/opt/airflow/jobs/pyspark_pi.py`. Копировать его в образ бессмысленно: bind-mount каталога `./airflow/jobs`
+перекрыл бы встроенный файл.
 
 ENV образа: `JAVA_HOME` (java-11), `SPARK_HOME=/opt/spark`, `HADOOP_HOME=/opt/hadoop`,
 `HADOOP_CONF_DIR=/opt/hadoop/etc/hadoop`, `PATH` += `$SPARK_HOME/bin:$HADOOP_HOME/bin`.
@@ -99,7 +101,7 @@ Airflow), подключаясь к `hadoop-postgres` под `hive/hive`. Опи
 AIRFLOW__CORE__EXECUTOR=LocalExecutor
 AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres/airflow
 AIRFLOW__CORE__LOAD_EXAMPLES=false
-AIRFLOW__CORE__LOAD_DEFAULT_CONNECTIONS=false
+AIRFLOW__DATABASE__LOAD_DEFAULT_CONNECTIONS=false
 AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION=false
 AIRFLOW__CORE__FERNET_KEY=''
 AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK=true
@@ -168,14 +170,18 @@ namespace `hadoop-cluster`. Отдельная интеграция Airflow↔Op
 4. `airflow dags test spark_pi_dag <date>` завершается успешно;
 5. `yarn application -list -appStates FINISHED` содержит приложение с именем `airflow_spark_pi`;
 6. `airflow dags test spark_etl_dag <date>` успешен, `hdfs dfs -ls` показывает `raw.parquet` и `agg.parquet`;
-7. `GET http://localhost:5000/api/v1/namespaces/hadoop-cluster/datasets` содержит оба датасета.
+7. `GET http://localhost:5000/api/v1/namespaces/hdfs%3A%2F%2Fnamenode%3A9000/datasets` содержит оба датасета.
+   Датасеты живут в неймспейсе URI хранилища (`hdfs://namenode:9000`), а не в job-неймспейсе `hadoop-cluster` —
+   проверено на живом Marquez 0.47.0.
 
 ## 9. Осознанно принятые компромиссы
 
 - **`/opt/hadoop` копируется в образ (+~700 МБ).** Бинарь `yarn` нужен хуку в `on_kill` (`yarn application
   -kill`); без него ручная отмена таски падает с `FileNotFoundError`. Размер для локального стенда приемлем.
-- **Провайдер тянет `pyspark==3.4.1` (~300 МБ) транзитивно.** В рантайме не используется: submit идёт бинарём
-  из `SPARK_HOME=/opt/spark` (Spark 3.5.2). Расхождение версий безвредно, отмечается в README.
+- **Провайдер ставится с `--no-deps`.** Его единственная зависимость сверх ядра Airflow — `pyspark` (~310 МБ),
+  который в рантайме не нужен: submit идёт бинарём из `SPARK_HOME=/opt/spark` (Spark 3.5.2). Проверено на чистом
+  образе: без pyspark `SparkSubmitOperator` и `SparkSubmitHook` импортируются, провайдер регистрируется в Airflow.
+  Побочный выигрыш — сборка перестаёт зависеть от загрузки 310-мегабайтного sdist через прокси, который её рвал.
 - **Airflow-уровневый OpenLineage не ставится.** Lineage покрывается Spark-листенером; Airflow-события в
   Marquez — отдельная задача.
 - **Учётка admin/admin и пустой Fernet-ключ.** Это локальный тест-стенд без внешнего доступа, как и остальные
