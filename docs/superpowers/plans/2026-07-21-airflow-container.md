@@ -144,8 +144,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=sparkdist --chown=airflow:root /opt/spark /opt/spark
 COPY --from=hadoopdist --chown=airflow:root /opt/hadoop /opt/hadoop
 
-# Джоба Pi берётся из образа Spark — не дублируем её исходник
-COPY --from=sparkdist --chown=airflow:root /opt/scripts/pyspark_pi.py /opt/airflow/jobs/pyspark_pi.py
 COPY --chown=airflow:root jobs/ /opt/airflow/jobs/
 COPY --chown=airflow:root scripts/ /opt/airflow/scripts/
 
@@ -420,6 +418,7 @@ echo "[init] готово"
     volumes: &airflow-volumes
       - ./airflow/dags:/opt/airflow/dags
       - ./airflow/jobs:/opt/airflow/jobs
+      - ./spark/scripts/pyspark_pi.py:/opt/airflow/jobs/pyspark_pi.py:ro
       - ./airflow/logs:/opt/airflow/logs
       - ./hive/config/hive-site.xml:/opt/spark/conf/hive-site.xml:ro
       - ./spark/config/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf:ro
@@ -528,7 +527,7 @@ git commit -m "feat: сервисы Airflow в compose и идемпотентн
 - Test: `docker exec hadoop-airflow-scheduler airflow dags test spark_pi_dag <date>` (см. шаги)
 
 **Interfaces:**
-- Consumes: коннекшен `spark_yarn` (Task 2); файл `/opt/airflow/jobs/pyspark_pi.py` внутри образа (Task 1), принимающий один позиционный аргумент — число сэмплов.
+- Consumes: коннекшен `spark_yarn` (Task 2); файл `spark/scripts/pyspark_pi.py`, смонтированный read-only в `/opt/airflow/jobs/pyspark_pi.py` (Task 2), принимающий один позиционный аргумент — число сэмплов.
 - Produces: `dag_id="spark_pi_dag"` с единственной таской `task_id="submit_pi"`; имя Spark-приложения `airflow_spark_pi` (по нему ищет проверка в Task 5).
 
 - [ ] **Step 1: Написать падающую проверку**

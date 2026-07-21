@@ -251,6 +251,7 @@ services:
     volumes: &airflow-volumes
       - ./airflow/dags:/opt/airflow/dags
       - ./airflow/jobs:/opt/airflow/jobs
+      - ./spark/scripts/pyspark_pi.py:/opt/airflow/jobs/pyspark_pi.py:ro
       - ./airflow/logs:/opt/airflow/logs
       - ./hive/config/hive-site.xml:/opt/spark/conf/hive-site.xml:ro
       - ./spark/config/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf:ro

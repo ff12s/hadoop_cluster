@@ -29,8 +29,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=sparkdist --chown=airflow:root /opt/spark /opt/spark
 COPY --from=hadoopdist --chown=airflow:root /opt/hadoop /opt/hadoop
 
-# Джоба Pi берётся из образа Spark — не дублируем её исходник
-COPY --from=sparkdist --chown=airflow:root /opt/scripts/pyspark_pi.py /opt/airflow/jobs/pyspark_pi.py
 COPY --chown=airflow:root jobs/ /opt/airflow/jobs/
 COPY --chown=airflow:root scripts/ /opt/airflow/scripts/
 
