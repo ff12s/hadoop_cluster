@@ -11,8 +11,12 @@
 .env.test.local
 sparketl/
 .claude/
-logs/
+/logs/
 .mcp.json
 
 # Собранный resolver-jar монтируется в стенд, но не коммитится
 spark/jars/*.jar
+
+# Логи Airflow монтируются в стенд, но не коммитятся
+airflow/logs/*
+!airflow/logs/.gitkeep
