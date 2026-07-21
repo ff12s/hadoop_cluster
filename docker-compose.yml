@@ -9,6 +9,7 @@ x-versions: &versions
   KYUUBI_VERSION: ${KYUUBI_VERSION}
   TEZ_VERSION: ${TEZ_VERSION}
   JUPYTER_VERSION: ${JUPYTER_VERSION}
+  AIRFLOW_VERSION: ${AIRFLOW_VERSION}
   OPENLINEAGE_VERSION: ${OPENLINEAGE_VERSION}
   OPENLINEAGE_NAMESPACE: ${OPENLINEAGE_NAMESPACE}
   JAVA_VERSION: ${JAVA_VERSION}
@@ -29,6 +30,14 @@ services:
       args:
         <<: *versions
     image: ${SPARK_IMAGE:-hadoop-cluster-spark:latest}
+    profiles: ["build"]
+  airflow-image:
+    build:
+      context: ./airflow
+      dockerfile: Dockerfile
+      args:
+        <<: *versions
+    image: ${AIRFLOW_IMAGE:-hadoop-cluster-airflow:latest}
     profiles: ["build"]
   marquez-db:
     image: postgres:13

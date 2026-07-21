@@ -28,7 +28,8 @@ function Read-DotEnv {
 $v = Read-DotEnv -Path $EnvPath
 $required = @(
     "HADOOP_VERSION", "JAVA_VERSION", "HIVE_VERSION", "TEZ_VERSION",
-    "SPARK_VERSION", "PYTHON_VERSION", "JUPYTER_VERSION", "KYUUBI_VERSION"
+    "SPARK_VERSION", "PYTHON_VERSION", "JUPYTER_VERSION", "KYUUBI_VERSION",
+    "AIRFLOW_VERSION"
 )
 foreach ($k in $required) {
     if (-not $v[$k]) { throw "Missing $k in .env" }
@@ -43,6 +44,7 @@ $sparkTag = "h$($v['HADOOP_VERSION'])-s$($v['SPARK_VERSION'])"
 $hiveTag = "h$($v['HADOOP_VERSION'])-hive$($v['HIVE_VERSION'])-tez$($v['TEZ_VERSION'])"
 $jupyterTag = "s$($v['SPARK_VERSION'])-py$pyMm-jlab$($v['JUPYTER_VERSION'])"
 $kyuubiTag = "k$($v['KYUUBI_VERSION'])-s$($v['SPARK_VERSION'])"
+$airflowTag = "a$($v['AIRFLOW_VERSION'])-s$($v['SPARK_VERSION'])"
 
 $data = [ordered]@{
     REGISTRY = $Registry
@@ -52,12 +54,14 @@ $data = [ordered]@{
     HIVE_IMAGE = "hadoop-cluster-hive:latest"
     JUPYTER_IMAGE = "hadoop-cluster-jupyter:latest"
     KYUUBI_IMAGE = "hadoop-cluster-kyuubi:latest"
+    AIRFLOW_IMAGE = "hadoop-cluster-airflow:latest"
 
     BASE_REMOTE = "$Registry/hadoop-base:$baseTag"
     SPARK_REMOTE = "$Registry/hadoop-spark:$sparkTag"
     HIVE_REMOTE = "$Registry/hadoop-hive-metastore:$hiveTag"
     JUPYTER_REMOTE = "$Registry/hadoop-jupyter:$jupyterTag"
     KYUUBI_REMOTE = "$Registry/hadoop-kyuubi:$kyuubiTag"
+    AIRFLOW_REMOTE = "$Registry/hadoop-airflow:$airflowTag"
 }
 
 if ($Format -eq "Json") {
