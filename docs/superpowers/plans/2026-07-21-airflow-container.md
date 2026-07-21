@@ -409,7 +409,7 @@ echo "[init] готово"
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
       AIRFLOW__CORE__LOAD_EXAMPLES: "false"
-      AIRFLOW__CORE__LOAD_DEFAULT_CONNECTIONS: "false"
+      AIRFLOW__DATABASE__LOAD_DEFAULT_CONNECTIONS: "false"
       AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
       AIRFLOW__CORE__FERNET_KEY: ""
       AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: "true"
@@ -466,9 +466,15 @@ echo "[init] готово"
 
 - [ ] **Step 5: Игнорировать логи Airflow**
 
-В `.gitignore` добавить:
+В `.gitignore` уже есть общее правило `logs/` (без анкера — матчит каталог `logs` на любой
+глубине), которое иначе исключило бы весь `airflow/logs/` целиком и не позволило бы точечно
+переисключить `.gitkeep` внутри него (родительский каталог, исключённый через `logs/`, нельзя
+частично переисключить `!`-паттерном на файл внутри). Поэтому рядом с существующим `logs/`
+добавить `!airflow/logs/`, а затем — точечное правило для самого каталога:
 
 ```
+logs/
+!airflow/logs/
 airflow/logs/*
 !airflow/logs/.gitkeep
 ```
