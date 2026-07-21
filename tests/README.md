@@ -12,6 +12,7 @@ This directory contains .bat scripts for managing and testing the Hadoop cluster
 - **`test-cluster.bat`** - Complete cluster testing
 - **`test-hdfs.bat`** - HDFS components testing only
 - **`test-yarn.bat`** - YARN components testing only
+- **`test-airflow.bat`** - Airflow orchestration testing only
 
 ## 🎯 Usage
 

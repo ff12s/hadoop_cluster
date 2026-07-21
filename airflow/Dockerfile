@@ -56,6 +56,8 @@ RUN { \
 
 USER airflow
 
-# Версия провайдера выбирается constraints-файлом соответствующей версии Airflow
-RUN pip install --no-cache-dir "apache-airflow-providers-apache-spark" \
+# Версия провайдера выбирается constraints-файлом соответствующей версии Airflow.
+# --no-deps: единственная транзитивная зависимость сверх ядра Airflow — pyspark,
+# который в рантайме не нужен, так как spark-submit берётся из /opt/spark.
+RUN pip install --no-cache-dir --no-deps "apache-airflow-providers-apache-spark" \
         --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-3.10.txt"

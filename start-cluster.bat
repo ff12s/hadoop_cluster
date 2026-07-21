@@ -130,7 +130,7 @@ rem a v2 shim. We never pass --parallel - it's redundant where supported and
 rem not accepted by current versions where it isn't.
 call :run_stage "[3/!TOTAL!] Building spark-image, hive-metastore" "%DC% build spark-image hive-metastore"
 if errorlevel 1 exit /b 1
-call :run_stage "[4/!TOTAL!] Building jupyter, kyuubi" "%DC% build jupyter kyuubi"
+call :run_stage "[4/!TOTAL!] Building jupyter, kyuubi, airflow" "%DC% build jupyter kyuubi airflow-image"
 if errorlevel 1 exit /b 1
 goto :verify_images
 
@@ -152,6 +152,7 @@ call :pull_or_mark spark-image "%SPARK_REMOTE%" "%SPARK_IMAGE%"
 call :pull_or_mark hive-metastore "%HIVE_REMOTE%" "%HIVE_IMAGE%"
 call :pull_or_mark jupyter "%JUPYTER_REMOTE%" "%JUPYTER_IMAGE%"
 call :pull_or_mark kyuubi "%KYUUBI_REMOTE%" "%KYUUBI_IMAGE%"
+call :pull_or_mark airflow-image "%AIRFLOW_REMOTE%" "%AIRFLOW_IMAGE%"
 
 if defined BUILD_SERVICES (
     call :run_stage "[3/!TOTAL!] Building missing images: !BUILD_SERVICES!" "%DC% build !BUILD_SERVICES!"
@@ -168,7 +169,7 @@ rem Catches drift if image-tags.ps1 ever stops aligning BASE_IMAGE/etc. with the
 rem hardcoded FROM in child Dockerfiles.
 <nul set /p "_=Verifying image tags... "
 set "VERIFY_FAIL=0"
-for %%I in ("%BASE_IMAGE%" "%SPARK_IMAGE%" "%HIVE_IMAGE%" "%JUPYTER_IMAGE%" "%KYUUBI_IMAGE%") do (
+for %%I in ("%BASE_IMAGE%" "%SPARK_IMAGE%" "%HIVE_IMAGE%" "%JUPYTER_IMAGE%" "%KYUUBI_IMAGE%" "%AIRFLOW_IMAGE%") do (
     docker image inspect %%I >> "%LOG_FILE%" 2>&1
     if errorlevel 1 (
         set "VERIFY_FAIL=1"
@@ -213,11 +214,13 @@ echo - Spark History:         http://localhost:18080
 echo.
 echo Web interfaces (direct):
 echo - JupyterLab:            http://localhost:8888
+echo - Airflow:               http://localhost:8080  (admin/admin)
 echo.
 echo Test scripts:
 echo - HDFS tests:        .\tests\test-hdfs.bat
 echo - YARN tests:        .\tests\test-yarn.bat
 echo - Full cluster test: .\tests\test-cluster.bat
+echo - Airflow tests:     .\tests\test-airflow.bat
 exit /b 0
 
 rem ===========================================================================
