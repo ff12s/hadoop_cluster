@@ -34,7 +34,8 @@ Marquez 0.47.0 одним `docker-compose.yml`. Spark-джобы уже отпр
 | `spark_binary` допускает только `spark-submit`/`spark2-submit`/`spark3-submit`; extra `spark-home` **бросает исключение**; бинарь обязан быть в `PATH` | hook 4.1.1 |
 | YARN application id парсится из лога **только** при `_is_yarn and deploy_mode == "cluster"`; `on_kill` зовёт внешний бинарь `yarn application -kill` | hook 4.1.1 |
 | `submit()` бросает `AirflowException` при ненулевом коде возврата spark-submit | hook 4.1.1 |
-| Официальный compose 2.6.3: `airflow-init` делает db migrate + создание админа; `AIRFLOW__CORE__EXECUTOR`, `AIRFLOW__DATABASE__SQL_ALCHEMY_CONN`, `AIRFLOW__CORE__LOAD_EXAMPLES`, `AIRFLOW__CORE__FERNET_KEY`, `AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK`; healthcheck `curl --fail http://localhost:8080/health` (webserver) и `:8974/health` (scheduler); volume'ы `./dags ./logs ./config ./plugins`; `AIRFLOW_UID` по умолчанию 50000 | airflow.apache.org/docs/apache-airflow/2.6.3/docker-compose.yaml |
+| **В 2.6.3 нет команды `airflow db migrate`** (появилась в 2.7). Подкоманды `airflow db`: `check, check-migrations, clean, downgrade, drop-archived, export-archived, init, reset, shell, upgrade` → используем `airflow db init` (идемпотентна, накатывает миграции) | airflow.apache.org/docs/apache-airflow/2.6.3/cli-and-env-variables-ref.html |
+| Официальный compose 2.6.3: `airflow-init` инициализирует БД + создаёт админа; `AIRFLOW__CORE__EXECUTOR`, `AIRFLOW__DATABASE__SQL_ALCHEMY_CONN`, `AIRFLOW__CORE__LOAD_EXAMPLES`, `AIRFLOW__CORE__FERNET_KEY`, `AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK`; healthcheck `curl --fail http://localhost:8080/health` (webserver) и `:8974/health` (scheduler); volume'ы `./dags ./logs ./config ./plugins`; `AIRFLOW_UID` по умолчанию 50000 | airflow.apache.org/docs/apache-airflow/2.6.3/docker-compose.yaml |
 | `_PIP_ADDITIONAL_REQUIREMENTS` ставит пакеты при **каждом** старте контейнера — официально не для продакшена, вместо него собственный образ | там же |
 | Redis/Celery/worker/flower нужны только для CeleryExecutor | там же |
 
@@ -73,7 +74,7 @@ ENV образа: `JAVA_HOME` (java-11), `SPARK_HOME=/opt/spark`, `HADOOP_HOME=/
 
 | Сервис | Роль |
 | --- | --- |
-| `airflow-init` | one-shot: идемпотентно создаёт роль/БД `airflow` → `airflow db migrate` → `airflow users create` (admin/admin) → регистрирует коннекшен. `restart: "no"` |
+| `airflow-init` | one-shot: идемпотентно создаёт роль/БД `airflow` → `airflow db init` → `airflow users create` (admin/admin, если ещё нет). `restart: "no"` |
 | `airflow-webserver` | `command: webserver`, порт `8080:8080`, healthcheck `curl --fail http://localhost:8080/health` |
 | `airflow-scheduler` | `command: scheduler`, `AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK=true`, healthcheck `curl --fail http://localhost:8974/health` |
 | `airflow-image` | build-only сервис под `profiles: ["build"]`, по образцу `base` / `spark-image` |
@@ -98,6 +99,7 @@ Airflow), подключаясь к `hadoop-postgres` под `hive/hive`. Опи
 AIRFLOW__CORE__EXECUTOR=LocalExecutor
 AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres/airflow
 AIRFLOW__CORE__LOAD_EXAMPLES=false
+AIRFLOW__CORE__LOAD_DEFAULT_CONNECTIONS=false
 AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION=false
 AIRFLOW__CORE__FERNET_KEY=''
 AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK=true
