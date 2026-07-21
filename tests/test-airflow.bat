@@ -5,8 +5,18 @@ echo ========================================
 
 echo.
 echo 1) Container health...
-docker inspect -f "webserver: {{.State.Health.Status}}" hadoop-airflow-webserver
-docker inspect -f "scheduler: {{.State.Health.Status}}" hadoop-airflow-scheduler
+for /f %%S in ('docker inspect -f "{{.State.Health.Status}}" hadoop-airflow-webserver') do set "WEBSERVER_HEALTH=%%S"
+echo webserver: %WEBSERVER_HEALTH%
+if not "%WEBSERVER_HEALTH%"=="healthy" (
+  echo [ERROR] hadoop-airflow-webserver is not healthy
+  exit /b 1
+)
+for /f %%S in ('docker inspect -f "{{.State.Health.Status}}" hadoop-airflow-scheduler') do set "SCHEDULER_HEALTH=%%S"
+echo scheduler: %SCHEDULER_HEALTH%
+if not "%SCHEDULER_HEALTH%"=="healthy" (
+  echo [ERROR] hadoop-airflow-scheduler is not healthy
+  exit /b 1
+)
 
 echo.
 echo 2) Image contents (spark-submit, yarn, java, provider)...
@@ -40,11 +50,17 @@ docker exec hadoop-airflow-scheduler airflow dags test spark_pi_dag 2026-07-21 |
   echo [ERROR] spark_pi_dag run failed
   exit /b 1
 )
+rem "dags test" не возвращает код ошибки по упавшим таскам (DAG.test() их проглатывает) -
+rem состояние тасок нужно проверять отдельно.
+docker exec hadoop-airflow-scheduler airflow tasks states-for-dag-run spark_pi_dag 2026-07-21 --output plain | findstr /c:"failed" >nul && (
+  echo [ERROR] spark_pi_dag has failed tasks
+  exit /b 1
+)
 
 echo.
 echo 6) YARN application for Pi...
-docker exec hadoop-namenode yarn application -list -appStates FINISHED | findstr /c:"airflow_spark_pi" || (
-  echo [ERROR] airflow_spark_pi not found in YARN
+docker exec hadoop-namenode yarn application -list -appStates FINISHED | findstr /c:"airflow_spark_pi" | findstr /c:"SUCCEEDED" >nul || (
+  echo [ERROR] airflow_spark_pi did not succeed
   exit /b 1
 )
 
@@ -52,6 +68,10 @@ echo.
 echo 7) Running spark_etl_dag...
 docker exec hadoop-airflow-scheduler airflow dags test spark_etl_dag 2026-07-21 || (
   echo [ERROR] spark_etl_dag run failed
+  exit /b 1
+)
+docker exec hadoop-airflow-scheduler airflow tasks states-for-dag-run spark_etl_dag 2026-07-21 --output plain | findstr /c:"failed" >nul && (
+  echo [ERROR] spark_etl_dag has failed tasks
   exit /b 1
 )
 

@@ -190,7 +190,9 @@ copy env_example .env
 - Версия задаётся `AIRFLOW_VERSION` в `.env` (по умолчанию `2.6.3`).
 - DAG'и и джобы лежат в `airflow/dags` и `airflow/jobs`, смонтированы в контейнеры — правка не требует пересборки образа.
 - `spark_pi_dag` — smoke-проверка связки Airflow → spark-submit → YARN.
-- `spark_etl_dag` — генерация и агрегация parquet в HDFS; лайнидж уезжает в Marquez (namespace `hadoop-cluster`).
+- `spark_etl_dag` — генерация и агрегация parquet в HDFS; лайнидж уезжает в Marquez. Джобы регистрируются
+  в job-неймспейсе `hadoop-cluster`, а сами датасеты (raw.parquet, agg.parquet) — в неймспейсе URI
+  хранилища `hdfs://namenode:9000` (это неймспейс, в котором их искать через `GET /api/v1/namespaces/...`).
 - Метаданные Airflow живут в общем контейнере `hadoop-postgres` (база `airflow`), её создаёт сервис `airflow-init`.
 - Джобы отправляются в `deploy-mode=cluster`: `spark-defaults.conf` указывает на интерпретатор `/opt/python/bin/python3`, которого в образе Airflow нет, поэтому драйвер должен уезжать в YARN.
 - Образ большой (~2.5 ГБ): в него копируются дистрибутивы Spark и Hadoop.
