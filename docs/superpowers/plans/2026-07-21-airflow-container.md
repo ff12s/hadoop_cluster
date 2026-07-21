@@ -650,7 +650,7 @@ def generate(output_path: str, rows: int) -> None:
     :param rows: количество строк.
     :return: None
     """
-    spark = SparkSession.builder.appName("airflow_etl_generate").enableHiveSupport().getOrCreate()
+    spark = SparkSession.builder.appName("airflow_etl_generate").getOrCreate()
     try:
         df = (
             spark.range(rows)
@@ -659,7 +659,7 @@ def generate(output_path: str, rows: int) -> None:
             .select("id", "region", "amount")
         )
         df.write.mode("overwrite").parquet(output_path)
-        print(f"записано строк: {df.count()} -> {output_path}")
+        print(f"датасет записан: {output_path}")
     finally:
         spark.stop()
 
@@ -688,7 +688,7 @@ def aggregate(input_path: str, output_path: str) -> None:
     :param output_path: путь назначения в HDFS.
     :return: None
     """
-    spark = SparkSession.builder.appName("airflow_etl_aggregate").enableHiveSupport().getOrCreate()
+    spark = SparkSession.builder.appName("airflow_etl_aggregate").getOrCreate()
     try:
         df = spark.read.parquet(input_path)
         agg = df.groupBy("region").agg(
@@ -696,7 +696,7 @@ def aggregate(input_path: str, output_path: str) -> None:
             F.count("*").alias("row_count"),
         )
         agg.write.mode("overwrite").parquet(output_path)
-        print(f"регионов записано: {agg.count()} -> {output_path}")
+        print(f"датасет записан: {output_path}")
     finally:
         spark.stop()
 
@@ -775,7 +775,7 @@ Expected: обе команды печатают содержимое катал
 
 Run:
 ```bash
-curl -s "http://localhost:5000/api/v1/namespaces/hadoop-cluster/datasets" | grep -o 'airflow_demo/[a-z]*\.parquet' | sort -u
+curl -s "http://localhost:5000/api/v1/namespaces/hdfs%3A%2F%2Fnamenode%3A9000/datasets?limit=100" | grep -o 'airflow_demo/[a-z]*\.parquet' | sort -u
 ```
 Expected: в выводе есть и `airflow_demo/raw.parquet`, и `airflow_demo/agg.parquet`.
 
@@ -875,7 +875,7 @@ docker exec hadoop-namenode hdfs dfs -ls /user/hadoop/airflow_demo/agg.parquet |
 
 echo.
 echo 9) Lineage in Marquez...
-curl -s "http://localhost:5000/api/v1/namespaces/hadoop-cluster/datasets" | findstr /c:"airflow_demo/agg.parquet" >nul || (
+curl -s "http://localhost:5000/api/v1/namespaces/hdfs%%3A%%2F%%2Fnamenode%%3A9000/datasets?limit=100" | findstr /c:"airflow_demo/agg.parquet" >nul || (
   echo [ERROR] agg.parquet not found in Marquez
   exit /b 1
 )

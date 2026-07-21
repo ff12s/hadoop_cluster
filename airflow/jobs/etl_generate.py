@@ -15,7 +15,7 @@ def generate(output_path: str, rows: int) -> None:
     :param rows: количество строк.
     :return: None
     """
-    spark = SparkSession.builder.appName("airflow_etl_generate").enableHiveSupport().getOrCreate()
+    spark = SparkSession.builder.appName("airflow_etl_generate").getOrCreate()
     try:
         df = (
             spark.range(rows)
@@ -24,7 +24,7 @@ def generate(output_path: str, rows: int) -> None:
             .select("id", "region", "amount")
         )
         df.write.mode("overwrite").parquet(output_path)
-        print(f"записано строк: {df.count()} -> {output_path}")
+        print(f"датасет записан: {output_path}")
     finally:
         spark.stop()
 

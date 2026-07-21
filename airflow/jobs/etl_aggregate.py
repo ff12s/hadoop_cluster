@@ -15,7 +15,7 @@ def aggregate(input_path: str, output_path: str) -> None:
     :param output_path: путь назначения в HDFS.
     :return: None
     """
-    spark = SparkSession.builder.appName("airflow_etl_aggregate").enableHiveSupport().getOrCreate()
+    spark = SparkSession.builder.appName("airflow_etl_aggregate").getOrCreate()
     try:
         df = spark.read.parquet(input_path)
         agg = df.groupBy("region").agg(
@@ -23,7 +23,7 @@ def aggregate(input_path: str, output_path: str) -> None:
             F.count("*").alias("row_count"),
         )
         agg.write.mode("overwrite").parquet(output_path)
-        print(f"регионов записано: {agg.count()} -> {output_path}")
+        print(f"датасет записан: {output_path}")
     finally:
         spark.stop()
 
