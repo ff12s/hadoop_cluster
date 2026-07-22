@@ -21,7 +21,7 @@ if errorlevel 1 (
 )
 
 set "NAMENODE_CONTAINER=hadoop-node"
-set "HIVESERVER2_CONTAINER=hadoop-hive"
+set "HIVE_CONTAINER=hadoop-hive"
 
 if not exist ".\scripts\image-tags.ps1" (
     echo ERROR: scripts\image-tags.ps1 not found. Aborting.
@@ -117,9 +117,9 @@ echo Log file: %LOG_FILE%
 echo.
 
 if "%FORCE_BUILD%"=="1" (
-    set "TOTAL=6"
+    set "TOTAL=7"
 ) else (
-    set "TOTAL=5"
+    set "TOTAL=6"
 )
 
 rem ===========================================================================
@@ -216,18 +216,28 @@ if "!VERIFY_FAIL!"=="1" (
 echo OK
 
 rem ===========================================================================
-rem Предпоследний этап: запуск сервисов
+rem Этап запуска сервисов
 rem ===========================================================================
-set /a "STAGE_UP=TOTAL - 1"
+set /a "STAGE_UP=TOTAL - 2"
 call :run_stage "[!STAGE_UP!/!TOTAL!] Starting services" "%DC% up -d --no-build"
 if errorlevel 1 exit /b 1
 
 rem ===========================================================================
-rem Последний этап: health-check'и (HDFS и Hive делят один номер этапа)
+rem Предпоследний этап: health-check'и (HDFS и Hive делят один номер этапа)
 rem ===========================================================================
-call :run_stage "[!TOTAL!/!TOTAL!] Health check: HDFS" "docker exec %NAMENODE_CONTAINER% /opt/scripts/check-hdfs.sh"
+set /a "STAGE_HEALTH=TOTAL - 1"
+call :run_stage "[!STAGE_HEALTH!/!TOTAL!] Health check: HDFS" "docker exec %NAMENODE_CONTAINER% /opt/scripts/check-hdfs.sh"
 if errorlevel 1 exit /b 1
-call :run_stage "[!TOTAL!/!TOTAL!] Health check: Hive" "docker exec %HIVESERVER2_CONTAINER% /opt/scripts/check-hive.sh"
+call :run_stage "[!STAGE_HEALTH!/!TOTAL!] Health check: Hive" "docker exec %HIVE_CONTAINER% /opt/scripts/check-hive.sh"
+if errorlevel 1 exit /b 1
+
+rem ===========================================================================
+rem Последний этап: health-check Marquez. Роль и база marquez создаются только
+rem init-скриптом Postgres, который не выполняется на существующем томе (нужен
+rem --clean) — без этой проверки апгрейдящийся пользователь получает "Cluster
+rem started successfully!" при неработающем lineage.
+rem ===========================================================================
+call :run_stage "[!TOTAL!/!TOTAL!] Health check: Marquez" "curl -sf --max-time 10 -o nul http://localhost:5000/api/v1/namespaces"
 if errorlevel 1 exit /b 1
 
 echo.
