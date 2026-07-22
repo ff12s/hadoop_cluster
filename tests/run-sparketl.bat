@@ -4,7 +4,7 @@ setlocal ENABLEDELAYEDEXPANSION
 rem Configuration
 set JOB_NAME=test
 set CLASS_NAME=sparketl.Main
-set CONTAINER=hadoop-spark-history
+set CONTAINER=hadoop-node
 set REMOTE_DIR=/opt/spark/jobs/sparketl
 
 rem Paths
@@ -57,7 +57,7 @@ docker exec hadoop-hiveserver2 bash -lc "beeline -u 'jdbc:hive2://hiveserver2:10
 
 echo.
 echo 3.1) Ensuring HDFS warehouse path exists...
-docker exec hadoop-namenode bash -lc "hdfs dfs -mkdir -p /user/hive/warehouse && hdfs dfs -chmod 1777 /user/hive/warehouse" || echo [WARN] HDFS prep step failed or already exists
+docker exec hadoop-node bash -lc "hdfs dfs -mkdir -p /user/hive/warehouse && hdfs dfs -chmod 1777 /user/hive/warehouse" || echo [WARN] HDFS prep step failed or already exists
 
 echo.
 echo 4) Submitting Spark job on YARN (cluster mode)...
@@ -68,7 +68,7 @@ docker exec %CONTAINER% bash -lc "spark-submit --name %JOB_NAME% --class %CLASS_
 
 echo.
 echo 5) Recent YARN applications:
-docker exec hadoop-namenode yarn application -list -appStates NEW,NEW_SAVING,SUBMITTED,ACCEPTED,RUNNING,FINISHED,FAILED,KILLED
+docker exec hadoop-node yarn application -list -appStates NEW,NEW_SAVING,SUBMITTED,ACCEPTED,RUNNING,FINISHED,FAILED,KILLED
 
 echo.
 echo Done.

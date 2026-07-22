@@ -90,7 +90,7 @@ findstr /c:"spark_etl_dag" "%OUT%" >nul || (
 
 echo.
 echo 5) Clearing HDFS artifacts of previous runs...
-docker exec hadoop-namenode hdfs dfs -rm -r -f %DEMO_DIR% || (
+docker exec hadoop-node hdfs dfs -rm -r -f %DEMO_DIR% || (
   echo [ERROR] Failed to clear %DEMO_DIR%
   goto :fail
 )
@@ -117,7 +117,7 @@ call :assert_tasks spark_pi_dag submit_pi || goto :fail
 echo.
 echo 7) YARN application for Pi (%PI_APP_ID%)...
 rem Проверяем именно приложение этого прогона: список FINISHED хранит и старые.
-docker exec hadoop-namenode yarn application -status %PI_APP_ID% > "%OUT%" 2>&1 || (
+docker exec hadoop-node yarn application -status %PI_APP_ID% > "%OUT%" 2>&1 || (
   echo [ERROR] Failed to query YARN application %PI_APP_ID%
   goto :fail
 )
@@ -144,8 +144,8 @@ call :unpause_dags
 
 echo.
 echo 9) HDFS artifacts...
-docker exec hadoop-namenode hdfs dfs -ls %DEMO_DIR%/raw.parquet || goto :fail
-docker exec hadoop-namenode hdfs dfs -ls %DEMO_DIR%/agg.parquet || goto :fail
+docker exec hadoop-node hdfs dfs -ls %DEMO_DIR%/raw.parquet || goto :fail
+docker exec hadoop-node hdfs dfs -ls %DEMO_DIR%/agg.parquet || goto :fail
 
 echo.
 echo 10) Lineage in Marquez...

@@ -33,7 +33,7 @@ function Get-PublishedPorts {
     return @($Service.ports | ForEach-Object { "$($_.published)" })
 }
 
-$cfg = Get-ComposeModel
+$cfg = Get-ComposeModel -Profiles @('build')
 $services = @($cfg.services.PSObject.Properties.Name)
 
 Write-Output "== Task 1: consolidation of PostgreSQL =="
@@ -45,6 +45,23 @@ $pgPorts = Get-PublishedPorts $cfg.services.postgres
 Assert-True ($pgPorts -contains '5433') "порт 5433 опубликован на postgres"
 Assert-True ($pgPorts -contains '5434') "порт 5434 опубликован на postgres"
 Assert-True (-not (@($cfg.volumes.PSObject.Properties.Name) -contains 'marquez-data')) "том marquez-data удалён"
+
+Write-Output ""
+Write-Output "== Task 2: merge of namenode, datanode and spark-history =="
+Assert-True (-not ($services -contains 'namenode')) "сервис namenode удалён из модели"
+Assert-True (-not ($services -contains 'datanode')) "сервис datanode удалён из модели"
+Assert-True (-not ($services -contains 'spark-history')) "сервис spark-history удалён из модели"
+Assert-True ($services -contains 'hadoop') "сервис hadoop присутствует"
+Assert-True ($cfg.services.hadoop.container_name -eq 'hadoop-node') "container_name сервиса hadoop = hadoop-node"
+$hadoopAliases = @($cfg.services.hadoop.networks.default.aliases)
+Assert-True ($hadoopAliases -contains 'namenode') "hadoop отвечает на DNS-имя namenode"
+Assert-True ($hadoopAliases -contains 'datanode') "hadoop отвечает на DNS-имя datanode"
+Assert-True ($hadoopAliases -contains 'spark-history') "hadoop отвечает на DNS-имя spark-history"
+Assert-True ($cfg.services.hadoop.image -eq $cfg.services.'spark-image'.image) "hadoop использует образ spark, а не base"
+$declaredVolumes = @($cfg.volumes.PSObject.Properties.Name)
+Assert-True (-not ($declaredVolumes -contains 'namenode-logs')) "том namenode-logs заменён"
+Assert-True (-not ($declaredVolumes -contains 'datanode-logs')) "том datanode-logs заменён"
+Assert-True ($declaredVolumes -contains 'hadoop-logs') "объявлен единый том hadoop-logs"
 
 Write-Output ""
 if ($script:Failed -gt 0) {

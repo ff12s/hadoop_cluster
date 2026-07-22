@@ -9,44 +9,39 @@ docker-compose ps
 
 echo.
 
-echo 2. Checking YARN processes...
-echo NameNode processes:
-docker exec hadoop-namenode jps
-
-echo.
-echo DataNode processes:
-docker exec hadoop-datanode jps
+echo 2. Checking Hadoop daemon processes (NameNode, DataNode, RM, NM, Timeline)...
+docker exec hadoop-node jps
 
 echo.
 echo 3. Checking YARN nodes...
-docker exec hadoop-namenode yarn node -list
+docker exec hadoop-node yarn node -list
 
 echo.
 echo 4. Checking YARN applications...
 echo All applications:
-docker exec hadoop-namenode yarn application -list
+docker exec hadoop-node yarn application -list
 
 echo.
 echo Finished applications:
-docker exec hadoop-namenode yarn application -list -appStates FINISHED
+docker exec hadoop-node yarn application -list -appStates FINISHED
 
 echo.
 echo Failed applications:
-docker exec hadoop-namenode yarn application -list -appStates FAILED
+docker exec hadoop-node yarn application -list -appStates FAILED
 
 echo.
 echo 5. Testing YARN with MapReduce job...
 echo Running wordcount example...
-docker exec hadoop-namenode hadoop jar $HADOOP_HOME/share/hadoop/mapreduce/hadoop-mapreduce-examples-3.3.6.jar wordcount /cluster-test/cluster-test.txt /output/wordcount
+docker exec hadoop-node hadoop jar $HADOOP_HOME/share/hadoop/mapreduce/hadoop-mapreduce-examples-3.3.6.jar wordcount /cluster-test/cluster-test.txt /output/wordcount
 
 echo.
 echo 6. Checking job results...
-docker exec hadoop-namenode hdfs dfs -cat /output/wordcount/part-r-00000
+docker exec hadoop-node hdfs dfs -cat /output/wordcount/part-r-00000
 
 echo.
 echo 7. Checking YARN application logs...
 echo Recent YARN applications:
-docker exec hadoop-namenode yarn application -list -appStates FINISHED,FAILED
+docker exec hadoop-node yarn application -list -appStates FINISHED,FAILED
 
 echo.
 echo 8. Checking web interfaces...

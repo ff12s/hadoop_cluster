@@ -39,7 +39,7 @@ docker exec hadoop-hiveserver2 beeline -u jdbc:hive2://hiveserver2:10000 -n hado
 
 echo Checking YARN application status...
 timeout /t 10 /nobreak > nul
-docker exec hadoop-namenode yarn application -list -appStates FINISHED
+docker exec hadoop-node yarn application -list -appStates FINISHED
 
 echo Querying test data...
 docker exec hadoop-hiveserver2 beeline -u jdbc:hive2://hiveserver2:10000 -n hadoop -e "USE test_db; SELECT * FROM test_table;"
@@ -47,16 +47,16 @@ docker exec hadoop-hiveserver2 beeline -u jdbc:hive2://hiveserver2:10000 -n hado
 echo.
 echo 7. Testing Hive with HDFS integration...
 echo Creating HDFS directory for Hive...
-docker exec hadoop-namenode hdfs dfs -mkdir -p /user/hive/warehouse
+docker exec hadoop-node hdfs dfs -mkdir -p /user/hive/warehouse
 
 echo Creating external table...
 docker exec hadoop-hiveserver2 beeline -u jdbc:hive2://hiveserver2:10000 -n hadoop -e "USE test_db; CREATE EXTERNAL TABLE IF NOT EXISTS hdfs_table (id INT, name STRING) ROW FORMAT DELIMITED FIELDS TERMINATED BY ',' LOCATION '/user/hive/warehouse/hdfs_table';"
 
 echo Creating test data file in HDFS...
-docker exec hadoop-namenode bash -c "echo '1,Test1' > /tmp/hdfs_data.csv"
-docker exec hadoop-namenode bash -c "echo '2,Test2' >> /tmp/hdfs_data.csv"
-docker exec hadoop-namenode bash -c "echo '3,Test3' >> /tmp/hdfs_data.csv"
-docker exec hadoop-namenode hdfs dfs -put /tmp/hdfs_data.csv /user/hive/warehouse/hdfs_table/
+docker exec hadoop-node bash -c "echo '1,Test1' > /tmp/hdfs_data.csv"
+docker exec hadoop-node bash -c "echo '2,Test2' >> /tmp/hdfs_data.csv"
+docker exec hadoop-node bash -c "echo '3,Test3' >> /tmp/hdfs_data.csv"
+docker exec hadoop-node hdfs dfs -put /tmp/hdfs_data.csv /user/hive/warehouse/hdfs_table/
 
 echo Querying HDFS table...
 docker exec hadoop-hiveserver2 beeline -u jdbc:hive2://hiveserver2:10000 -n hadoop -e "USE test_db; SELECT * FROM hdfs_table;"

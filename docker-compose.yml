@@ -136,37 +136,31 @@ services:
       timeout: 5s
       retries: 20
 
-  namenode:
-    image: ${BASE_IMAGE:-hadoop-cluster-base:latest}
-    container_name: hadoop-namenode
-    hostname: namenode
+  hadoop:
+    image: ${SPARK_IMAGE:-hadoop-cluster-spark:latest}
+    container_name: hadoop-node
+    hostname: hadoop-node
     user: "0:0"
     volumes:
       - namenode-data:/opt/hadoop/dfs/name
-      - namenode-logs:/opt/hadoop/logs
+      - hadoop-logs:/opt/hadoop/logs
+      - datanode-data:/opt/hadoop/dfs/data
       - timeline-data:/opt/hadoop/timeline-data
       - ./hive/config/hive-site.xml:/opt/hadoop/etc/hadoop/hive-site.xml:ro
       - ./hive/config/tez-site.xml:/opt/hadoop/etc/hadoop/tez-site.xml:ro
+      - ./hive/config/hive-site.xml:/opt/spark/conf/hive-site.xml:ro
+      - ./spark/config/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf:ro
+      - ./spark/config/log4j.properties:/opt/spark/conf/log4j.properties:ro
     environment:
       <<: *versions
       HADOOP_CONF_DIR: /opt/hadoop/etc/hadoop
-    command: ["/opt/scripts/start-namenode.sh"]
-
-  datanode:
-    image: ${BASE_IMAGE:-hadoop-cluster-base:latest}
-    container_name: hadoop-datanode
-    hostname: datanode
-    volumes:
-      - datanode-data:/opt/hadoop/dfs/data
-      - datanode-logs:/opt/hadoop/logs
-      - ./hive/config/hive-site.xml:/opt/hadoop/etc/hadoop/hive-site.xml:ro
-      - ./hive/config/tez-site.xml:/opt/hadoop/etc/hadoop/tez-site.xml:ro
-    environment:
-      <<: *versions
-      HADOOP_CONF_DIR: /opt/hadoop/etc/hadoop
-    depends_on:
-      - namenode
-    command: ["/opt/scripts/start-datanode.sh"]
+    networks:
+      default:
+        aliases:
+          - namenode
+          - datanode
+          - spark-history
+    command: ["/opt/scripts/start-hadoop.sh"]
 
   hive-metastore:
     build:
@@ -186,7 +180,7 @@ services:
       <<: *versions
     depends_on:
       - postgres
-      - namenode
+      - hadoop
     command: ["/opt/scripts/start-metastore.sh"]
 
   hiveserver2:
@@ -202,7 +196,7 @@ services:
       <<: *versions
     depends_on:
       - hive-metastore
-      - namenode
+      - hadoop
     command: ["/opt/scripts/start-hiveserver2.sh"]
 
   tez-ui:
@@ -212,25 +206,8 @@ services:
     environment:
       <<: *versions
     depends_on:
-      - namenode
+      - hadoop
     command: ["/opt/scripts/start-tez-ui.sh"]
-
-  spark-history:
-    image: ${SPARK_IMAGE:-hadoop-cluster-spark:latest}
-    container_name: hadoop-spark-history
-    hostname: spark-history
-    environment:
-      <<: *versions
-      HADOOP_CONF_DIR: /opt/hadoop/etc/hadoop
-    volumes:
-      - ./hive/config/hive-site.xml:/opt/hadoop/etc/hadoop/hive-site.xml:ro
-      - ./hive/config/hive-site.xml:/opt/spark/conf/hive-site.xml:ro
-      - ./spark/config/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf:ro
-      - ./spark/config/log4j.properties:/opt/spark/conf/log4j.properties:ro
-    depends_on:
-      - namenode
-      - datanode
-    command: ["/opt/scripts/start-spark-history.sh"]
 
   jupyter:
     build:
@@ -254,8 +231,7 @@ services:
       - ./spark/config/log4j.properties:/opt/spark/conf/log4j.properties:ro
       - ${OL_RESOLVER_JAR:-./spark/jars/openlineage-namespace-resolver.jar}:/opt/spark/jars/openlineage-namespace-resolver.jar:ro
     depends_on:
-      - namenode
-      - datanode
+      - hadoop
     command: ["/opt/scripts/start-jupyter.sh"]
 
   airflow-init:
@@ -325,9 +301,7 @@ services:
     container_name: hadoop-kyuubi
     hostname: kyuubi
     depends_on:
-      - namenode
-      - datanode
-      - spark-history
+      - hadoop
       - marquez
     ports:
       - "10009:10009"  # Thrift Binary
@@ -356,16 +330,14 @@ services:
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
     depends_on:
-      - namenode
-      - datanode
+      - hadoop
 
 volumes:
   postgres-data:
   namenode-data:
-  namenode-logs:
+  hadoop-logs:
   timeline-data:
   datanode-data:
-  datanode-logs:
   hive-warehouse:
   hive-logs:
 

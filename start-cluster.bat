@@ -20,7 +20,7 @@ if errorlevel 1 (
     set "DC=docker compose"
 )
 
-set "NAMENODE_CONTAINER=hadoop-namenode"
+set "NAMENODE_CONTAINER=hadoop-node"
 set "HIVESERVER2_CONTAINER=hadoop-hiveserver2"
 
 if not exist ".\scripts\image-tags.ps1" (

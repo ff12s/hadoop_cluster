@@ -242,10 +242,10 @@ copy env_example .env
 ### Создание директорий вручную
 
 ```bash
-docker exec hadoop-namenode hdfs dfs -mkdir -p /user/hive/warehouse /tmp/hive /tmp /spark-events
-docker exec hadoop-namenode hdfs dfs -chmod 1777 /tmp
-docker exec hadoop-namenode hdfs dfs -chmod 1777 /user/hive/warehouse
-docker exec hadoop-namenode hdfs dfs -chmod 733 /tmp/hive
+docker exec hadoop-node hdfs dfs -mkdir -p /user/hive/warehouse /tmp/hive /tmp /spark-events
+docker exec hadoop-node hdfs dfs -chmod 1777 /tmp
+docker exec hadoop-node hdfs dfs -chmod 1777 /user/hive/warehouse
+docker exec hadoop-node hdfs dfs -chmod 733 /tmp/hive
 ```
 
 ## Тестирование
@@ -346,17 +346,17 @@ docker compose logs -f tez-ui
 ### HDFS статус
 
 ```bash
-docker exec hadoop-namenode hdfs dfsadmin -report
+docker exec hadoop-node hdfs dfsadmin -report
 ```
 
 ### Проверка сервисов
 
 ```bash
 # HDFS
-docker exec hadoop-namenode hdfs dfs -ls /
+docker exec hadoop-node hdfs dfs -ls /
 
 # YARN
-docker exec hadoop-namenode yarn node -list
+docker exec hadoop-node yarn node -list
 
 # Hive
 docker exec hadoop-hiveserver2 beeline -u 'jdbc:hive2://localhost:10000' -n hadoop -e 'SHOW DATABASES;'
