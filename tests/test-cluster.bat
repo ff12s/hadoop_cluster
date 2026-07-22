@@ -56,7 +56,7 @@ docker exec hadoop-node hdfs dfs -cat /cluster-test/cluster-test.txt
 echo.
 echo 8. Spark testing...
 echo Ensuring Spark History is up...
-docker-compose up -d spark-history
+docker-compose up -d hadoop
 
 echo Checking Spark History UI:
 curl -s -o nul -w "HTTP Status: %%{http_code}\n" http://localhost:18080
@@ -72,12 +72,8 @@ docker exec hadoop-node yarn application -list -appStates FINISHED,FAILED
 
 echo.
 echo 9. Checking logs...
-echo NameNode logs:
-docker-compose logs --tail=5 namenode
-
-echo.
-echo DataNode logs:
-docker-compose logs --tail=5 datanode
+echo Hadoop node logs (NameNode, DataNode):
+docker-compose logs --tail=5 hadoop
 
 echo.
 echo ========================================

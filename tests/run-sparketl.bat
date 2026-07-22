@@ -39,7 +39,7 @@ echo Using args: %ARGS_FILE%
 echo.
 echo 1) Ensuring target dir in container...
 docker exec %CONTAINER% bash -lc "mkdir -p %REMOTE_DIR% && rm -f %REMOTE_DIR%/*.jar %REMOTE_DIR%/args.json" || (
-  echo [ERROR] Container %CONTAINER% is not running. Start it first: docker-compose up -d spark-history
+  echo [ERROR] Container %CONTAINER% is not running. Start it first: docker-compose up -d hadoop
   exit /b 1
 )
 

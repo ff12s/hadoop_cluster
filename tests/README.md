@@ -97,6 +97,5 @@
 
 Логи контейнеров смотрятся так:
 ```bash
-docker-compose logs namenode
-docker-compose logs datanode
+docker-compose logs hadoop
 ```

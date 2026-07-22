@@ -139,7 +139,7 @@ DROP TABLE IF EXISTS default.mart_top_countries;
 И HDFS-парquet датасет из 09:
 
 ```bash
-docker compose exec namenode hdfs dfs -rm -r -skipTrash /tmp/lineage/events_parquet
+docker compose exec hadoop hdfs dfs -rm -r -skipTrash /tmp/lineage/events_parquet
 ```
 
 Историю Marquez при необходимости можно стереть через `docker compose down -v`
