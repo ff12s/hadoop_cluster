@@ -20,8 +20,8 @@ if errorlevel 1 (
     set "DC=docker compose"
 )
 
-set "NAMENODE_CONTAINER=hadoop-namenode"
-set "HIVESERVER2_CONTAINER=hadoop-hiveserver2"
+set "NAMENODE_CONTAINER=hadoop-node"
+set "HIVE_CONTAINER=hadoop-hive"
 
 if not exist ".\scripts\image-tags.ps1" (
     echo ERROR: scripts\image-tags.ps1 not found. Aborting.
@@ -54,6 +54,8 @@ set "BUILD_T2="
 set "BUILD_T3="
 set "FORCE_BUILD=0"
 set "CLEAN=0"
+set "WITH_KYUUBI=0"
+set "WITH_JUPYTER=0"
 
 :parse_args
 if "%~1"=="" goto :args_done
@@ -68,6 +70,13 @@ if /i "%~1"=="--build" (
 ) else if /i "%~1"=="clean" (
     echo WARNING: positional 'clean' is deprecated, use --clean instead.
     set "CLEAN=1"
+) else if /i "%~1"=="--with-kyuubi" (
+    set "WITH_KYUUBI=1"
+) else if /i "%~1"=="--with-jupyter" (
+    set "WITH_JUPYTER=1"
+) else if /i "%~1"=="--all" (
+    set "WITH_KYUUBI=1"
+    set "WITH_JUPYTER=1"
 ) else if /i "%~1"=="--help" (
     goto :show_help
 ) else if /i "%~1"=="-h" (
@@ -83,6 +92,18 @@ shift
 goto :parse_args
 :args_done
 
+rem Список профилей для docker compose. COMPOSE_PROFILES читается самим compose,
+rem поэтому передавать --profile в каждую команду не требуется.
+set "ACTIVE_PROFILES="
+if "%WITH_KYUUBI%"=="1" set "ACTIVE_PROFILES=kyuubi"
+if "%WITH_JUPYTER%"=="1" (
+    if defined ACTIVE_PROFILES (
+        set "ACTIVE_PROFILES=!ACTIVE_PROFILES!,jupyter"
+    ) else (
+        set "ACTIVE_PROFILES=jupyter"
+    )
+)
+
 rem ===========================================================================
 rem Лог: сюда стекается stdout/stderr всех этапов. Спиннер (scripts\run-stage.ps1)
 rem читает его хвост, чтобы показать текущий шаг; при падении печатается путь к
@@ -96,14 +117,18 @@ echo Log file: %LOG_FILE%
 echo.
 
 if "%FORCE_BUILD%"=="1" (
-    set "TOTAL=6"
+    set "TOTAL=7"
 ) else (
-    set "TOTAL=5"
+    set "TOTAL=6"
 )
 
 rem ===========================================================================
 rem Этап 1: остановка контейнеров (с очисткой по --clean)
 rem ===========================================================================
+rem down выполняется со ВСЕМИ профилями: без этого ранее поднятые kyuubi и jupyter
+rem переживут рестарт стенда и продолжат занимать память (docker compose down не
+rem трогает контейнеры выключенных профилей).
+set "COMPOSE_PROFILES=kyuubi,jupyter"
 if "%CLEAN%"=="1" (
     call :run_stage "[1/!TOTAL!] Stopping containers and removing volumes" "%DC% down -v --remove-orphans"
     if errorlevel 1 exit /b 1
@@ -113,6 +138,8 @@ if "%CLEAN%"=="1" (
     call :run_stage "[1/!TOTAL!] Stopping containers" "%DC% down --remove-orphans"
     if errorlevel 1 exit /b 1
 )
+rem Возвращаем набор профилей, выбранный пользователем, для всех дальнейших этапов.
+set "COMPOSE_PROFILES=%ACTIVE_PROFILES%"
 
 if "%FORCE_BUILD%"=="1" goto :force_build_all
 goto :try_pull_then_build
@@ -120,8 +147,8 @@ goto :try_pull_then_build
 rem ===========================================================================
 rem Путь B (--build): три этапа сборки по графу зависимостей:
 rem   этап 2: base
-rem   этап 3: spark-image, hive-metastore  (оба FROM base)
-rem   этап 4: jupyter, kyuubi, airflow     (оба FROM spark, airflow копирует из них)
+rem   этап 3: spark-image, hive  (оба FROM base)
+rem   этап 4: airflow-image, плюс jupyter/kyuubi при --with-jupyter/--with-kyuubi
 rem --pull не используем: локальные FROM-образы стенда не лежат в registry.
 rem ===========================================================================
 :force_build_all
@@ -129,9 +156,12 @@ call :run_stage "[2/!TOTAL!] Building base" "%DC% build base"
 if errorlevel 1 exit /b 1
 rem --parallel не передаём: docker compose v2 собирает независимые сервисы
 rem параллельно сам и такого флага не принимает.
-call :run_stage "[3/!TOTAL!] Building spark-image, hive-metastore" "%DC% build spark-image hive-metastore"
+call :run_stage "[3/!TOTAL!] Building spark-image, hive" "%DC% build spark-image hive"
 if errorlevel 1 exit /b 1
-call :run_stage "[4/!TOTAL!] Building jupyter, kyuubi, airflow" "%DC% build jupyter kyuubi airflow-image"
+set "T3_SERVICES=airflow-image"
+if "%WITH_JUPYTER%"=="1" set "T3_SERVICES=!T3_SERVICES! jupyter"
+if "%WITH_KYUUBI%"=="1" set "T3_SERVICES=!T3_SERVICES! kyuubi"
+call :run_stage "[4/!TOTAL!] Building !T3_SERVICES!" "%DC% build !T3_SERVICES!"
 if errorlevel 1 exit /b 1
 goto :verify_images
 
@@ -144,9 +174,9 @@ echo.
 echo [2/!TOTAL!] Pulling images from Docker Hub
 call :pull_or_mark base "%BASE_REMOTE%" "%BASE_IMAGE%" 1
 call :pull_or_mark spark-image "%SPARK_REMOTE%" "%SPARK_IMAGE%" 2
-call :pull_or_mark hive-metastore "%HIVE_REMOTE%" "%HIVE_IMAGE%" 2
-call :pull_or_mark jupyter "%JUPYTER_REMOTE%" "%JUPYTER_IMAGE%" 3
-call :pull_or_mark kyuubi "%KYUUBI_REMOTE%" "%KYUUBI_IMAGE%" 3
+call :pull_or_mark hive "%HIVE_REMOTE%" "%HIVE_IMAGE%" 2
+if "%WITH_JUPYTER%"=="1" call :pull_or_mark jupyter "%JUPYTER_REMOTE%" "%JUPYTER_IMAGE%" 3
+if "%WITH_KYUUBI%"=="1" call :pull_or_mark kyuubi "%KYUUBI_REMOTE%" "%KYUUBI_IMAGE%" 3
 call :pull_or_mark airflow-image "%AIRFLOW_REMOTE%" "%AIRFLOW_IMAGE%" 3
 
 if not defined BUILD_T1 if not defined BUILD_T2 if not defined BUILD_T3 (
@@ -167,7 +197,10 @@ rem Перед 'up -d --no-build' проверяем, что все нужные
 rem ловим расхождение image-tags.ps1 с захардкоженными FROM дочерних Dockerfile'ов.
 <nul set /p "_=Verifying image tags... "
 set "VERIFY_FAIL=0"
-for %%I in ("%BASE_IMAGE%" "%SPARK_IMAGE%" "%HIVE_IMAGE%" "%JUPYTER_IMAGE%" "%KYUUBI_IMAGE%" "%AIRFLOW_IMAGE%") do (
+set "VERIFY_IMAGES="%BASE_IMAGE%" "%SPARK_IMAGE%" "%HIVE_IMAGE%" "%AIRFLOW_IMAGE%""
+if "%WITH_JUPYTER%"=="1" set "VERIFY_IMAGES=!VERIFY_IMAGES! "%JUPYTER_IMAGE%""
+if "%WITH_KYUUBI%"=="1" set "VERIFY_IMAGES=!VERIFY_IMAGES! "%KYUUBI_IMAGE%""
+for %%I in (!VERIFY_IMAGES!) do (
     docker image inspect %%I >> "%LOG_FILE%" 2>&1
     if errorlevel 1 (
         set "VERIFY_FAIL=1"
@@ -183,22 +216,35 @@ if "!VERIFY_FAIL!"=="1" (
 echo OK
 
 rem ===========================================================================
-rem Предпоследний этап: запуск сервисов
+rem Этап запуска сервисов
 rem ===========================================================================
-set /a "STAGE_UP=TOTAL - 1"
+set /a "STAGE_UP=TOTAL - 2"
 call :run_stage "[!STAGE_UP!/!TOTAL!] Starting services" "%DC% up -d --no-build"
 if errorlevel 1 exit /b 1
 
 rem ===========================================================================
-rem Последний этап: health-check'и (HDFS и Hive делят один номер этапа)
+rem Предпоследний этап: health-check'и (HDFS и Hive делят один номер этапа)
 rem ===========================================================================
-call :run_stage "[!TOTAL!/!TOTAL!] Health check: HDFS" "docker exec %NAMENODE_CONTAINER% /opt/scripts/check-hdfs.sh"
+set /a "STAGE_HEALTH=TOTAL - 1"
+call :run_stage "[!STAGE_HEALTH!/!TOTAL!] Health check: HDFS" "docker exec %NAMENODE_CONTAINER% /opt/scripts/check-hdfs.sh"
 if errorlevel 1 exit /b 1
-call :run_stage "[!TOTAL!/!TOTAL!] Health check: Hive" "docker exec %HIVESERVER2_CONTAINER% /opt/scripts/check-hive.sh"
+call :run_stage "[!STAGE_HEALTH!/!TOTAL!] Health check: Hive" "docker exec %HIVE_CONTAINER% /opt/scripts/check-hive.sh"
+if errorlevel 1 exit /b 1
+
+rem ===========================================================================
+rem Последний этап: health-check Marquez. Роль и база marquez создаются только
+rem init-скриптом Postgres, который не выполняется на существующем томе (нужен
+rem --clean) — без этой проверки апгрейдящийся пользователь получает "Cluster
+rem started successfully!" при неработающем lineage.
+rem ===========================================================================
+call :run_stage "[!TOTAL!/!TOTAL!] Health check: Marquez" "curl -sf --max-time 10 -o nul http://localhost:5000/api/v1/namespaces"
 if errorlevel 1 exit /b 1
 
 echo.
 echo Cluster started successfully!
+echo.
+echo NOTE: after upgrading from the pre-consolidation layout run once with --clean:
+echo       the new PostgreSQL init script only runs on an empty data volume.
 echo.
 echo Web interfaces (via nginx proxy):
 echo - HDFS NameNode:         http://localhost:9870
@@ -211,7 +257,16 @@ echo - TEZ UI:                http://localhost:9999
 echo - Spark History:         http://localhost:18080
 echo.
 echo Web interfaces (direct):
-echo - JupyterLab:            http://localhost:8888
+if "%WITH_JUPYTER%"=="1" (
+    echo - JupyterLab:            http://localhost:8888
+) else (
+    echo - JupyterLab:            disabled ^(start with --with-jupyter^)
+)
+if "%WITH_KYUUBI%"=="1" (
+    echo - Kyuubi:                jdbc:hive2://localhost:10009
+) else (
+    echo - Kyuubi:                disabled ^(start with --with-kyuubi^)
+)
 echo - Airflow:               http://localhost:8080  (default login: admin/admin)
 echo.
 echo Test scripts:
@@ -238,6 +293,9 @@ echo   -b, --build    Force rebuild of all images (skips pulling from Docker Hub
 echo                  Use this to refresh images after Dockerfile or version changes.
 echo   -c, --clean    Remove volumes and prune Docker system before starting.
 echo                  WARNING: this deletes all cluster data (HDFS, Hive metastore, etc).
+echo   --with-kyuubi  Also start the optional Kyuubi container.
+echo   --with-jupyter Also start the optional JupyterLab container.
+echo   --all          Start every optional container (kyuubi + jupyter).
 echo   -h, --help     Show this help and exit.
 echo.
 echo Examples:
@@ -245,6 +303,7 @@ echo   start-cluster.bat                  Pull prebuilt images, build only missi
 echo   start-cluster.bat --clean          Wipe volumes, then pull/build as usual.
 echo   start-cluster.bat --build          Rebuild everything from scratch (no pulling).
 echo   start-cluster.bat --clean --build  Wipe volumes and rebuild everything.
+echo   start-cluster.bat --all            Start the stand with every optional service.
 echo.
 echo Logs: full stdout/stderr of every stage goes to .\logs\start-cluster-*.log
 exit /b %HELP_EXIT%

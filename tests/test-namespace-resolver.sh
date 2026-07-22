@@ -36,6 +36,15 @@ for i in $(seq 1 12); do
   sleep 5
 done
 
+# Фильтр docker с якорями ^$ даёт точное совпадение имени и не зависит от того,
+# завершает ли docker строки CR (из-за него grep -qx на Windows промахивается).
+if [ -z "$(docker ps --filter 'name=^hadoop-jupyter$' --format '{{.Names}}')" ]; then
+    echo "ERROR: контейнер hadoop-jupyter не запущен."
+    echo "Jupyter вынесен в опциональный профиль compose."
+    echo "Поднимите стенд командой: start-cluster.bat --with-jupyter"
+    exit 1
+fi
+
 echo "== 4) Прогон lineage-ноутбука с резолвером, включённым только на этот прогон =="
 # Резолвер активируется через per-run SPARK_CONF_DIR: копируем штатный conf,
 # дописываем строку резолвера туда, коммитнутый spark-defaults.conf не трогаем.

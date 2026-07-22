@@ -8,8 +8,8 @@
 - **Hive 3.1.3** — Data Warehouse с PostgreSQL 13 и движком **Apache Tez**
 - **Apache Tez 0.10.2** — DAG-движок для Hive (замена MapReduce), с Tez UI
 - **Spark 3.5.2** — Обработка данных и машинное обучение
-- **JupyterLab** — Интерактивная разработка с PySpark и Scala
-- **Kyuubi 1.10.2** — Spark SQL через JDBC/Thrift
+- **JupyterLab** — Интерактивная разработка с PySpark и Scala (опционально, профиль `jupyter`)
+- **Kyuubi 1.10.2** — Spark SQL через JDBC/Thrift (опционально, профиль `kyuubi`)
 - **Airflow 2.6.3** — Оркестрация Spark-джоб на YARN
 - **OpenLineage** — Трассировка данных (Marquez)
 - **Nginx** — Реверс-прокси для всех веб-интерфейсов
@@ -25,11 +25,17 @@
 ### Запуск кластера
 
 ```bash
-# Полный запуск: pull из Docker Hub, при отсутствии тега — build, затем запуск + health-check
+# Полный запуск: pull из Docker Hub, при отсутствии тега — build, затем запуск + health-check.
+# Поднимает семь основных сервисов; kyuubi и jupyter остаются выключенными.
 start-cluster.bat
 
 # Полный запуск с очисткой volumes
-start-cluster.bat clean
+start-cluster.bat --clean
+
+# Дополнительно поднять опциональные сервисы
+start-cluster.bat --with-kyuubi
+start-cluster.bat --with-jupyter
+start-cluster.bat --all
 
 # Остановка
 docker compose stop
@@ -37,6 +43,45 @@ docker compose stop
 # Остановка с удалением контейнеров
 docker compose down
 ```
+
+> ⚠️ **При переходе со старой раскладки стенда требуется разовый `start-cluster.bat --clean`.**
+> Роль и база `marquez` создаются init-скриптом PostgreSQL, а он выполняется только на пустом
+> томе данных. Без очистки база не появится и Marquez не поднимется. Очистка стирает HDFS,
+> hive warehouse, метаданные Airflow и историю Marquez.
+
+> ⚠️ **Изменили что-то в `base/`, `hive/`, `spark/`, `jupyter/`, `kyuubi/` или `airflow/` —
+> переиздайте образы.** Без флага `--build` скрипт тянет готовые образы с Docker Hub и
+> **перетирает ими локально собранные теги**. Если опубликованные образы отстали от
+> репозитория, стенд падает на старте (например, `stat /opt/scripts/start-hadoop.sh:
+> no such file or directory`). Порядок: `start-cluster.bat --build --all`, убедиться что стенд
+> поднялся, затем `powershell -File scripts\push-images.ps1`.
+
+### Опциональные сервисы: Kyuubi и Jupyter
+
+По умолчанию поднимаются только семь основных сервисов (`hadoop`, `postgres`, `hive`,
+`airflow`, `marquez`, `marquez-web`, `webproxy`) — `kyuubi` и `jupyter` тяжёлые и не
+нужны для базового сценария, поэтому вынесены в опциональные compose-профили `kyuubi`
+и `jupyter` и по умолчанию не стартуют.
+
+```bash
+# Рекомендуемый способ — флаги скрипта запуска
+start-cluster.bat --with-kyuubi
+start-cluster.bat --all
+
+# Напрямую через compose
+docker compose --profile kyuubi --profile jupyter up -d
+
+# То же самое через переменную окружения
+COMPOSE_PROFILES=kyuubi,jupyter docker compose up -d
+```
+
+> ⚠️ `docker compose down` **не останавливает** контейнеры выключенных профилей —
+> это документированное поведение Docker Compose. Если стенд был поднят с профилями,
+> гасите его с теми же профилями: `COMPOSE_PROFILES=kyuubi,jupyter docker compose down`.
+>
+> `start-cluster.bat` эту ловушку закрывает сам: этап остановки он всегда выполняет со
+> всеми профилями, поэтому обычный `start-cluster.bat` без флагов снимает и ранее
+> поднятые `kyuubi` с `jupyter`, а не оставляет их занимать память.
 
 ## Веб-интерфейсы
 
@@ -54,7 +99,7 @@ docker compose down
 | Tez UI | http://localhost:9999 | Мониторинг DAG-задач Tez |
 | Spark History Server | http://localhost:18080 | История Spark-приложений |
 | HiveServer2 Web UI | http://localhost:10002 | Веб-интерфейс Hive |
-| JupyterLab | http://localhost:8888 | Интерактивная разработка |
+| JupyterLab | http://localhost:8888 | Интерактивная разработка (профиль `jupyter`, не поднимается по умолчанию) |
 | Airflow | http://localhost:8080 | Оркестрация DAG'ов (учётка по умолчанию `admin` / `admin`) |
 | Marquez Web | http://localhost:3000 | Трассировка данных |
 | Marquez API | http://localhost:5000 | API для трассировки |
@@ -62,28 +107,35 @@ docker compose down
 ## Архитектура
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│  Nginx Reverse Proxy (webproxy)                                 │
-│  :9870 :8088 :8188 :9864 :8042 :10002 :9999 :18080             │
-└────────┬────────┬────────┬────────┬────────┬────────┬───────────┘
-         │        │        │        │        │        │
-   ┌─────▼──┐ ┌──▼───┐ ┌──▼──┐ ┌──▼───┐ ┌──▼──┐ ┌──▼──────┐
-   │NameNode│ │Data  │ │Tez  │ │Hive  │ │Hive │ │Spark    │
-   │ + YARN │ │Node  │ │UI   │ │Server│ │Meta │ │History  │
-   │ + ATS  │ │      │ │     │ │2     │ │store│ │Server   │
-   └───┬────┘ └──┬───┘ └─────┘ └──┬───┘ └──┬──┘ └─────────┘
-       │         │                 │        │
-       └─────┬───┘        ┌───────┘   ┌────┘
-             │             │           │
-        ┌────▼────┐   ┌───▼───┐  ┌────▼─────┐
-        │  HDFS   │   │Kyuubi │  │PostgreSQL │
-        │         │   │:10009 │  │(Metastore)│
-        └─────────┘   └───────┘  └───────────┘
+┌───────────────────────────────────────────────────────────────┐
+│   Nginx Reverse Proxy (webproxy, отдаёт и статику TEZ UI)     │
+│       :9870 :8088 :8188 :9864 :8042 :10002 :9999 :18080       │
+└─────────┬───────────────────────────────┬───────────────────────┘
+          │                               │
+┌───────────────────┐              ┌──────────────────────────┐
+│ Hadoop Node       │              │ Hive                     │
+│                   │              │ - Metastore :9083        │
+│ - NameNode        │              │   (thrift, напрямую,     │
+│ - DataNode        │              │    мимо nginx)           │
+│ - ResourceManager │              │ - HiveServer2            │
+│ - NodeManager     │              └──────────────────────────┘
+│ - Timeline Server │
+│ - Spark History   │
+└───────────────────┘
+          │                          │                │
+          ▼                          ▼                ▼
+      ┌──────┐                  ┌────────┐  ┌──────────────────┐
+      │ HDFS │                  │ Kyuubi │  │ PostgreSQL       │
+      └──────┘                  │ :10009 │  │                  │
+                                └────────┘  │ - hive_metastore │
+                                            │ - airflow        │
+                                            │ - marquez        │
+                                            └──────────────────┘
 
-   ┌──────────┐  ┌──────────┐  ┌───────────────┐
-   │JupyterLab│  │ Marquez  │  │  Marquez DB   │
-   │  :8888   │  │:3000/:5k │  │  (PostgreSQL) │
-   └──────────┘  └──────────┘  └───────────────┘
+   ┌────────────┐   ┌─────────────┐
+   │ JupyterLab │   │   Marquez   │
+   │   :8888    │   │ :3000/:5000 │
+   └────────────┘   └─────────────┘
 ```
 
 ## Структура проекта
@@ -97,7 +149,7 @@ hadoop_cluster/
 │   └── Dockerfile
 ├── hive/                    # Hive + Tez (Metastore + HiveServer2 + Tez UI)
 │   ├── config/              # hive-site.xml, tez-site.xml
-│   ├── scripts/             # start-metastore, start-hiveserver2, start-tez-ui
+│   ├── scripts/             # start-hive
 │   ├── .dockerignore
 │   └── Dockerfile
 ├── spark/                   # Spark с History Server
@@ -118,7 +170,7 @@ hadoop_cluster/
 ├── airflow/                 # Airflow (webserver + scheduler)
 │   ├── dags/                # spark_pi_dag, spark_etl_dag
 │   ├── jobs/                # PySpark-джобы для DAG'ов
-│   ├── scripts/             # init-airflow.sh, ensure_db.py
+│   ├── scripts/             # start-airflow.sh, ensure_db.py
 │   ├── logs/                # Логи задач (монтируются, не коммитятся)
 │   ├── .dockerignore
 │   └── Dockerfile
@@ -180,6 +232,9 @@ copy env_example .env
 > Hive использует **Tez** в качестве движка выполнения запросов, что значительно быстрее MapReduce. DAG-задачи можно мониторить в [Tez UI](http://localhost:9999).
 
 ### Kyuubi через DBeaver / JDBC
+
+> Требует профиль compose `kyuubi` (см. "Опциональные сервисы" выше).
+
 - **Драйвер**: Apache Hive 3.1+
 - **Host**: `localhost`
 - **Port**: `10009`
@@ -191,6 +246,9 @@ copy env_example .env
 > Kyuubi использует **Spark SQL** в качестве движка, поддерживает все возможности Spark SQL.
 
 ### Spark через Jupyter
+
+> Требует профиль compose `jupyter` (см. "Опциональные сервисы" выше).
+
 - Откройте http://localhost:8888
 - Доступны ядра: Python (PySpark), Scala (Toree)
 - Автоматически подключён к YARN
@@ -200,19 +258,31 @@ copy env_example .env
 Оркестратор для запуска Spark-джоб на YARN. UI: http://localhost:8080, учётка по умолчанию `admin` / `admin`
 (переопределяется `AIRFLOW_ADMIN_USER` / `AIRFLOW_ADMIN_PASSWORD`).
 
+> ⚠️ **Креды инициализации видны через `docker inspect`, пока жив контейнер.** После слияния трёх
+> контейнеров Airflow в один креды суперпользователя Postgres (`AIRFLOW_DB_ADMIN_USER` /
+> `AIRFLOW_DB_ADMIN_PASSWORD`) и пароль администратора UI (`AIRFLOW_ADMIN_PASSWORD`) заданы в
+> `docker-compose.yml` как обычные переменные окружения сервиса `airflow` — `docker inspect hadoop-airflow`
+> (или любой доступ к хосту/сокету Docker) показывает их в открытом виде всё время жизни контейнера,
+> это не лечится изнутри контейнера. `start-airflow.sh` после разовой инициализации делает `unset` этих
+> переменных перед запуском scheduler'а и webserver'а — это закрывает только вторую дыру: без `unset`
+> любой DAG читал бы их через `os.environ`, так как таски исполняются как дочерние процессы того же
+> долгоживущего процесса. Для реального окружения (не локального стенда) такая схема хранения кредов
+> неприемлема в любом случае.
+
 - Версия задаётся `AIRFLOW_VERSION` в `.env` (по умолчанию `2.6.3`).
 - DAG'и и джобы лежат в `airflow/dags` и `airflow/jobs`, смонтированы в контейнеры — правка не требует пересборки образа.
 - `spark_pi_dag` — smoke-проверка связки Airflow → spark-submit → YARN.
 - `spark_etl_dag` — генерация и агрегация parquet в HDFS; лайнидж уезжает в Marquez. Джобы регистрируются
   в job-неймспейсе `hadoop-cluster`, а сами датасеты (raw.parquet, agg.parquet) — в неймспейсе URI
   хранилища `hdfs://namenode:9000` (это неймспейс, в котором их искать через `GET /api/v1/namespaces/...`).
-- Метаданные Airflow живут в общем контейнере `hadoop-postgres` (база `airflow`), её создаёт сервис `airflow-init`,
-  дождавшись healthcheck'а Postgres. Имя роли, пароль и базу можно переопределить в `.env`
+- Метаданные Airflow живут в общем контейнере `hadoop-postgres` (база `airflow`), её создаёт сервис `airflow`
+  (контейнер `hadoop-airflow`) при каждом старте, дождавшись healthcheck'а Postgres — инициализация выполняется
+  перед запуском scheduler и webserver в этом же контейнере. Имя роли, пароль и базу можно переопределить в `.env`
   (`AIRFLOW_DB_USER`, `AIRFLOW_DB_PASSWORD`, `AIRFLOW_DB_NAME`; все они перечислены закомментированными
   в `env_example`) — из них же собирается строка подключения Airflow.
   Пароль подставляется в URI `postgresql+psycopg2://user:pass@host:port/db` как есть, поэтому символы `@ : / # ?`
   в нём использовать нельзя. Смена `AIRFLOW_DB_PASSWORD` на уже инициализированном стенде подхватывается:
-  `airflow-init` при каждом запуске приводит пароль роли к текущему значению.
+  инициализация при каждом запуске приводит пароль роли к текущему значению.
 - Учётка UI задаётся `AIRFLOW_ADMIN_USER` / `AIRFLOW_ADMIN_PASSWORD` и создаётся **один раз**, при первичной
   инициализации; позже пароль меняется только через UI или `airflow users delete` + пересоздание.
 - Шифрование секретов в базе метаданных по умолчанию выключено (`AIRFLOW__CORE__FERNET_KEY` пуст) — пароли
@@ -242,10 +312,10 @@ copy env_example .env
 ### Создание директорий вручную
 
 ```bash
-docker exec hadoop-namenode hdfs dfs -mkdir -p /user/hive/warehouse /tmp/hive /tmp /spark-events
-docker exec hadoop-namenode hdfs dfs -chmod 1777 /tmp
-docker exec hadoop-namenode hdfs dfs -chmod 1777 /user/hive/warehouse
-docker exec hadoop-namenode hdfs dfs -chmod 733 /tmp/hive
+docker exec hadoop-node hdfs dfs -mkdir -p /user/hive/warehouse /tmp/hive /tmp /spark-events
+docker exec hadoop-node hdfs dfs -chmod 1777 /tmp
+docker exec hadoop-node hdfs dfs -chmod 1777 /user/hive/warehouse
+docker exec hadoop-node hdfs dfs -chmod 733 /tmp/hive
 ```
 
 ## Тестирование
@@ -265,7 +335,7 @@ tests\test-cluster.bat
 | YARN | `tests\test-yarn.bat` | ResourceManager, NodeManager, MapReduce |
 | Spark | `tests\test-spark.bat` | Spark Pi на YARN, PySpark, History Server |
 | Hive | `tests\test-hive.bat` | HiveServer2, создание таблиц, SQL-запросы, Metastore |
-| Kyuubi | `tests\test-kyuubi.bat` | Beeline, Spark SQL таблицы, приложения в YARN |
+| Kyuubi | `tests\test-kyuubi.bat` | Beeline, Spark SQL таблицы, приложения в YARN (нужен профиль `kyuubi`, см. "Опциональные сервисы") |
 | OpenLineage | `tests\test-openlineage.bat` | Marquez API, трассировка Spark, метаданные |
 | Airflow | `tests\test-airflow.bat` | Health контейнеров, импорт DAG'ов, прогон обоих DAG'ов, артефакты в HDFS и лайнидж |
 
@@ -277,7 +347,7 @@ tests\test-cluster.bat
 # Вычислить теги (dry-run)
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\push-images.ps1 -DryRun
 
-# Tag + push всех образов (base, spark, hive-metastore, jupyter, kyuubi, airflow)
+# Tag + push всех образов (base, spark, hive, jupyter, kyuubi, airflow)
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\push-images.ps1
 ```
 
@@ -292,8 +362,8 @@ docker compose build base
 # Spark образ
 docker compose build spark-image
 
-# Hive образ (включает Tez)
-docker compose build hive-metastore
+# Hive образ (включает Tez, Metastore + HiveServer2)
+docker compose build hive
 
 # Jupyter образ
 docker compose build jupyter
@@ -308,14 +378,17 @@ docker compose build airflow-image
 ### Управление сервисами
 
 ```bash
-# Запуск всего кластера
+# Запуск основных семи сервисов (без kyuubi и jupyter)
 docker compose up -d
 
-# Остановка
+# Запуск вместе с опциональными сервисами
+docker compose --profile kyuubi --profile jupyter up -d
+
+# Остановка (см. предупреждение про профили в разделе "Быстрый старт")
 docker compose down
 
-# Перезапуск конкретного сервиса
-docker compose restart jupyter
+# Перезапуск конкретного сервиса (явное имя активирует его профиль, если он есть)
+docker compose restart hive
 ```
 
 ### Просмотр логов
@@ -325,10 +398,13 @@ docker compose restart jupyter
 docker compose logs -f
 
 # Логи конкретного сервиса
-docker compose logs -f namenode
-docker compose logs -f hiveserver2
-docker compose logs -f tez-ui
+docker compose logs -f hadoop
+docker compose logs -f hive
+docker compose logs -f webproxy
 ```
+
+Статику TEZ UI публикует контейнер `hadoop-hive` в том `tez-ui-static`, а отдаёт
+её nginx (`webproxy`) на порту 9999 — отдельного сервиса `tez-ui` больше нет.
 
 ## Мониторинг
 
@@ -346,20 +422,20 @@ docker compose logs -f tez-ui
 ### HDFS статус
 
 ```bash
-docker exec hadoop-namenode hdfs dfsadmin -report
+docker exec hadoop-node hdfs dfsadmin -report
 ```
 
 ### Проверка сервисов
 
 ```bash
 # HDFS
-docker exec hadoop-namenode hdfs dfs -ls /
+docker exec hadoop-node hdfs dfs -ls /
 
 # YARN
-docker exec hadoop-namenode yarn node -list
+docker exec hadoop-node yarn node -list
 
 # Hive
-docker exec hadoop-hiveserver2 beeline -u 'jdbc:hive2://localhost:10000' -n hadoop -e 'SHOW DATABASES;'
+docker exec hadoop-hive beeline -u 'jdbc:hive2://localhost:10000' -n hadoop -e 'SHOW DATABASES;'
 
 # Kyuubi
 docker exec hadoop-kyuubi beeline -u 'jdbc:hive2://localhost:10009' -n hadoop -e 'SHOW DATABASES;'
@@ -374,8 +450,8 @@ docker exec hadoop-kyuubi beeline -u 'jdbc:hive2://localhost:10009' -n hadoop -e
 |------|--------|
 | 3000 | Marquez Web |
 | 5000 | Marquez API |
-| 5433 | Marquez PostgreSQL |
-| 5434 | Hive Metastore PostgreSQL |
+| 5433 | Общий PostgreSQL (совместимость с прежним marquez-db) |
+| 5434 | Общий PostgreSQL (hive_metastore, airflow, marquez) |
 | 8042 | YARN NodeManager UI |
 | 8080 | Airflow Web UI |
 | 8088 | YARN ResourceManager UI |
@@ -403,11 +479,15 @@ docker exec hadoop-kyuubi beeline -u 'jdbc:hive2://localhost:10009' -n hadoop -e
 ```bash
 # Полная пересборка
 docker compose down
-docker compose build --no-cache
+docker compose build --no-cache base spark-image hive airflow-image
 docker compose up -d
 ```
 
-Если нужно принудительно игнорировать pull и пересобрать только локально, удалите локальные образы и запустите `start-cluster.bat` — скрипт автоматически пересоберет только отсутствующие.
+`base`, `spark-image` и `airflow-image` лежат в опциональном профиле `build` — `docker compose build`
+без явного списка имён их пропускает и соберёт только `hive` (обычный сервис вне профилей). Поэтому
+для полной пересборки сервисы нужно перечислять явно, как в примере выше.
+
+Если нужно принудительно игнорировать pull и пересобрать только локально, запустите `start-cluster.bat --build` — скрипт соберёт все образы сам, без обращения к Docker Hub.
 
 ## Полезные ссылки
 

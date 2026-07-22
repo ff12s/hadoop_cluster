@@ -1,0 +1,153 @@
+#!/bin/bash
+set -uo pipefail
+
+echo "=== Starting Hive (Metastore + HiveServer2) ==="
+
+# --- Метастор ---------------------------------------------------------------
+
+echo "Waiting for PostgreSQL to be ready..."
+until nc -z postgres 5432; do
+    echo "PostgreSQL not ready, waiting..."
+    sleep 5
+done
+echo "PostgreSQL is ready!"
+
+# Classpath без TEZ: иначе FsTracer/HTrace конфликтуют с Hadoop 3.3, а TEZ метастору не нужен
+export HADOOP_CLASSPATH=$HADOOP_CONF_DIR:$HIVE_HOME/lib/*
+
+echo "Initializing/Upgrading Hive Metastore schema..."
+if schematool -dbType postgres -info >/dev/null 2>&1; then
+  echo "Metastore schema exists. Upgrading if needed..."
+  schematool -dbType postgres -upgradeSchema
+  schema_rc=$?
+else
+  echo "Metastore schema not found. Initializing..."
+  schematool -dbType postgres -initSchema
+  schema_rc=$?
+fi
+# Без "-e" ненулевой код schematool сам по себе не роняет скрипт — проверяем явно,
+# иначе метастор поднимется поверх не применённой/битой схемы и откажет позже неявно.
+if [ "$schema_rc" -ne 0 ]; then
+  echo "ERROR: schematool exited with code $schema_rc, metastore schema is not in a known-good state" >&2
+  exit 1
+fi
+
+echo "Starting Hive Metastore..."
+$HIVE_HOME/bin/hive --service metastore &
+
+echo "Waiting for Metastore port 9083..."
+for i in {1..24}; do
+  if nc -z localhost 9083; then
+    echo "Hive Metastore is listening on 9083"
+    break
+  fi
+  echo "Waiting for metastore ($i/24)..."
+  sleep 5
+done
+if ! nc -z localhost 9083; then
+  echo "ERROR: metastore did not open port 9083"
+  tail -n 200 /opt/hive/logs/* || true
+  exit 1
+fi
+
+# --- Статика TEZ UI ---------------------------------------------------------
+# WAR распакован в образ при сборке; отдаёт его nginx, поэтому кладём содержимое
+# в общий том и пишем туда же конфиг с адресами Timeline Server и ResourceManager.
+
+TEZ_UI_SRC=/opt/tez-ui
+TEZ_UI_DST=/srv/tez-ui
+
+if [ -d "$TEZ_UI_SRC" ] && [ -n "$(ls -A "$TEZ_UI_SRC" 2>/dev/null)" ]; then
+    echo "Publishing TEZ UI static files to $TEZ_UI_DST..."
+    publish_rc=0
+    mkdir -p "$TEZ_UI_DST" || publish_rc=$?
+    if [ "$publish_rc" -eq 0 ]; then
+        cp -a "$TEZ_UI_SRC/." "$TEZ_UI_DST/" || publish_rc=$?
+    fi
+    if [ "$publish_rc" -eq 0 ]; then
+        mkdir -p "$TEZ_UI_DST/config" || publish_rc=$?
+    fi
+    if [ "$publish_rc" -eq 0 ]; then
+        cat > "$TEZ_UI_DST/config/configs.env" << 'ENVEOF'
+# TEZ UI configuration
+# URLs go through nginx webproxy, so localhost works without hosts file
+ENV = {
+  defined: {
+    defined: true,
+    timelineBaseUrl: "http://localhost:8188",
+    RMWebUrl: "http://localhost:8088"
+  }
+};
+ENVEOF
+        publish_rc=$?
+    fi
+    # Без "-e" сбой mkdir/cp/записи configs.env сам по себе не роняет скрипт —
+    # проверяем publish_rc явно, иначе "TEZ UI published" напечатается при
+    # реально неудачной публикации (read-only том, нет места, битый /opt/tez-ui).
+    if [ "$publish_rc" -ne 0 ]; then
+        echo "ERROR: failed to publish TEZ UI static files to $TEZ_UI_DST (rc=$publish_rc)" >&2
+        exit 1
+    fi
+    echo "TEZ UI published"
+else
+    echo "WARNING: $TEZ_UI_SRC is empty or missing, TEZ UI will not be served"
+fi
+
+# --- HiveServer2 ------------------------------------------------------------
+
+echo "Waiting for HDFS to be ready..."
+until hdfs dfs -test -d /; do
+    echo "HDFS not ready, waiting..."
+    sleep 5
+done
+
+echo "Waiting for HDFS to leave safe mode..."
+hdfs dfsadmin -safemode wait
+
+echo "Checking TEZ libraries in HDFS..."
+hdfs dfs -mkdir -p /apps/tez
+if ! hdfs dfs -test -e /apps/tez/tez.tar.gz; then
+    echo "Uploading TEZ libraries to HDFS..."
+    if [ -f "$TEZ_HOME/share/tez.tar.gz" ]; then
+        hdfs dfs -put "$TEZ_HOME/share/tez.tar.gz" /apps/tez/tez.tar.gz
+        echo "TEZ libraries uploaded to /apps/tez/tez.tar.gz"
+    else
+        echo "WARNING: TEZ archive not found at $TEZ_HOME/share/tez.tar.gz"
+        echo "Searching for TEZ archive..."
+        TEZ_ARCHIVE=$(find $TEZ_HOME -name "tez*.tar.gz" -type f 2>/dev/null | head -1)
+        if [ -n "$TEZ_ARCHIVE" ]; then
+            hdfs dfs -put "$TEZ_ARCHIVE" /apps/tez/tez.tar.gz
+            echo "TEZ libraries uploaded from $TEZ_ARCHIVE"
+        else
+            echo "ERROR: No TEZ archive found. TEZ jobs may fail!"
+        fi
+    fi
+else
+    echo "TEZ libraries already present in HDFS"
+fi
+
+hdfs dfs -mkdir -p /tmp/tez/staging
+hdfs dfs -chmod -R 777 /tmp/tez
+
+echo "Waiting for YARN Timeline Server to be ready..."
+until nc -z namenode 8188; do
+    echo "Timeline Server not ready, waiting..."
+    sleep 5
+done
+echo "YARN Timeline Server is ready!"
+
+echo "Starting HiveServer2..."
+export HADOOP_CLASSPATH=$HADOOP_CONF_DIR:$HADOOP_HOME/share/hadoop/common/*:$HADOOP_HOME/share/hadoop/common/lib/*:$HADOOP_HOME/share/hadoop/hdfs/*:$HADOOP_HOME/share/hadoop/hdfs/lib/*:$TEZ_CONF_DIR:$TEZ_HOME/*:$TEZ_HOME/lib/*:$HIVE_HOME/lib/*
+export HIVE_LOG_DIR=/opt/hive/logs
+export HIVE_OPTS="-hiveconf hive.root.logger=INFO,console"
+exec $HIVE_HOME/bin/hiveserver2 \
+  --hiveconf hive.server2.transport.mode=binary \
+  --hiveconf hive.server2.thrift.bind.host=0.0.0.0 \
+  --hiveconf hive.server2.thrift.port=10000 \
+  --hiveconf hive.server2.webui.port=10002 \
+  --hiveconf hive.server2.webui.host=0.0.0.0 \
+  --hiveconf hive.metastore.uris=thrift://hive-metastore:9083 \
+  --hiveconf hive.metastore.warehouse.dir=hdfs://namenode:9000/user/hive/warehouse \
+  --hiveconf hive.exec.scratchdir=hdfs://namenode:9000/tmp/hive \
+  --hiveconf hive.server2.enable.doAs=false \
+  --hiveconf hive.root.logger=INFO,console

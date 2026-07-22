@@ -3,6 +3,16 @@ echo ========================================
 echo Kyuubi Testing
 echo ========================================
 
+rem Фильтр docker с якорями ^$ даёт точное совпадение имени. findstr с /e здесь не годится:
+rem docker ps завершает строки CR, и якорь конца строки не срабатывает.
+docker ps --filter "name=^hadoop-kyuubi$" --format "{{.Names}}" | findstr /r "." >nul
+if errorlevel 1 (
+    echo ERROR: container hadoop-kyuubi is not running.
+    echo Kyuubi lives behind an opt-in compose profile.
+    echo Start the stand with:  start-cluster.bat --with-kyuubi
+    exit /b 1
+)
+
 echo.
 echo 1. Checking container status...
 docker-compose ps
@@ -24,16 +34,16 @@ for /l %%i in (1,1,20) do (
 
 echo.
 echo 5. Testing connection via Beeline (engine Spark on YARN, SQL DDL/DML)...
-docker exec hadoop-hiveserver2 bash -lc "beeline -u 'jdbc:hive2://kyuubi:10009' -n hadoop -e \"set spark.sql.shuffle.partitions=2; DROP DATABASE IF EXISTS kyuubi_db CASCADE; CREATE DATABASE kyuubi_db; USE kyuubi_db; CREATE TABLE IF NOT EXISTS kyuubi_table (id INT, name STRING); INSERT INTO kyuubi_table VALUES (1, 'k1'), (2, 'k2'); SELECT COUNT(*) AS cnt FROM kyuubi_table; SELECT * FROM kyuubi_table ORDER BY id;\""
+docker exec hadoop-hive bash -lc "beeline -u 'jdbc:hive2://kyuubi:10009' -n hadoop -e \"set spark.sql.shuffle.partitions=2; DROP DATABASE IF EXISTS kyuubi_db CASCADE; CREATE DATABASE kyuubi_db; USE kyuubi_db; CREATE TABLE IF NOT EXISTS kyuubi_table (id INT, name STRING); INSERT INTO kyuubi_table VALUES (1, 'k1'), (2, 'k2'); SELECT COUNT(*) AS cnt FROM kyuubi_table; SELECT * FROM kyuubi_table ORDER BY id;\""
 
 echo.
 echo 6. Checking HDFS data for kyuubi_table...
-docker exec hadoop-namenode bash -lc "hdfs dfs -ls /user/hive/warehouse/kyuubi_db.db/kyuubi_table || true"
-docker exec hadoop-namenode bash -lc "f=\$(hdfs dfs -ls -t /user/hive/warehouse/kyuubi_db.db/kyuubi_table 2>/dev/null | head -1 | awk '{print \$8}'); if [ -n \"\$f\" ]; then hdfs dfs -cat \"\$f\" | head -n 5; else echo 'No data files found'; fi"
+docker exec hadoop-node bash -lc "hdfs dfs -ls /user/hive/warehouse/kyuubi_db.db/kyuubi_table || true"
+docker exec hadoop-node bash -lc "f=\$(hdfs dfs -ls -t /user/hive/warehouse/kyuubi_db.db/kyuubi_table 2>/dev/null | head -1 | awk '{print \$8}'); if [ -n \"\$f\" ]; then hdfs dfs -cat \"\$f\" | head -n 5; else echo 'No data files found'; fi"
 
 echo.
 echo 7. Checking recent YARN applications (SPARK)...
-docker exec hadoop-namenode yarn application -list -appStates FINISHED,FAILED
+docker exec hadoop-node yarn application -list -appStates FINISHED,FAILED
 
 echo.
 echo 8. Kyuubi logs (last 80 lines)...
