@@ -108,17 +108,17 @@ COMPOSE_PROFILES=kyuubi,jupyter docker compose up -d
 
 ```
 ┌───────────────────────────────────────────────────────────────┐
-│                 Nginx Reverse Proxy (webproxy)                │
+│   Nginx Reverse Proxy (webproxy, отдаёт и статику TEZ UI)     │
 │       :9870 :8088 :8188 :9864 :8042 :10002 :9999 :18080       │
-└─────────┬───────────────┬──────────────┬──────────────────────┘
-          │               │              │
-┌───────────────────┐  ┌─────┐  ┌─────────────────┐
-│ Hadoop Node       │  │ Tez │  │ Hive            │
-│                   │  │  UI │  │                 │
-│ - NameNode        │  └─────┘  │ - Metastore     │
-│ - DataNode        │           │ - HiveServer2   │
-│ - ResourceManager │           └─────────────────┘
-│ - NodeManager     │
+└─────────┬───────────────────────────────┬───────────────────────┘
+          │                               │
+┌───────────────────┐              ┌──────────────────────────┐
+│ Hadoop Node       │              │ Hive                     │
+│                   │              │ - Metastore :9083        │
+│ - NameNode        │              │   (thrift, напрямую,     │
+│ - DataNode        │              │    мимо nginx)           │
+│ - ResourceManager │              │ - HiveServer2            │
+│ - NodeManager     │              └──────────────────────────┘
 │ - Timeline Server │
 │ - Spark History   │
 └───────────────────┘
@@ -257,6 +257,17 @@ copy env_example .env
 
 Оркестратор для запуска Spark-джоб на YARN. UI: http://localhost:8080, учётка по умолчанию `admin` / `admin`
 (переопределяется `AIRFLOW_ADMIN_USER` / `AIRFLOW_ADMIN_PASSWORD`).
+
+> ⚠️ **Креды инициализации видны через `docker inspect`, пока жив контейнер.** После слияния трёх
+> контейнеров Airflow в один креды суперпользователя Postgres (`AIRFLOW_DB_ADMIN_USER` /
+> `AIRFLOW_DB_ADMIN_PASSWORD`) и пароль администратора UI (`AIRFLOW_ADMIN_PASSWORD`) заданы в
+> `docker-compose.yml` как обычные переменные окружения сервиса `airflow` — `docker inspect hadoop-airflow`
+> (или любой доступ к хосту/сокету Docker) показывает их в открытом виде всё время жизни контейнера,
+> это не лечится изнутри контейнера. `start-airflow.sh` после разовой инициализации делает `unset` этих
+> переменных перед запуском scheduler'а и webserver'а — это закрывает только вторую дыру: без `unset`
+> любой DAG читал бы их через `os.environ`, так как таски исполняются как дочерние процессы того же
+> долгоживущего процесса. Для реального окружения (не локального стенда) такая схема хранения кредов
+> неприемлема в любом случае.
 
 - Версия задаётся `AIRFLOW_VERSION` в `.env` (по умолчанию `2.6.3`).
 - DAG'и и джобы лежат в `airflow/dags` и `airflow/jobs`, смонтированы в контейнеры — правка не требует пересборки образа.
@@ -468,11 +479,15 @@ docker exec hadoop-kyuubi beeline -u 'jdbc:hive2://localhost:10009' -n hadoop -e
 ```bash
 # Полная пересборка
 docker compose down
-docker compose build --no-cache
+docker compose build --no-cache base spark-image hive airflow-image
 docker compose up -d
 ```
 
-Если нужно принудительно игнорировать pull и пересобрать только локально, удалите локальные образы и запустите `start-cluster.bat` — скрипт автоматически пересоберет только отсутствующие.
+`base`, `spark-image` и `airflow-image` лежат в опциональном профиле `build` — `docker compose build`
+без явного списка имён их пропускает и соберёт только `hive` (обычный сервис вне профилей). Поэтому
+для полной пересборки сервисы нужно перечислять явно, как в примере выше.
+
+Если нужно принудительно игнорировать pull и пересобрать только локально, запустите `start-cluster.bat --build` — скрипт соберёт все образы сам, без обращения к Docker Hub.
 
 ## Полезные ссылки
 

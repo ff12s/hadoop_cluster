@@ -115,8 +115,10 @@ PostgreSQL, отдельный контейнер под статический 
 * Новый скрипт `base/scripts/start-hadoop.sh` последовательно поднимает: формат NameNode при первом
   запуске → `hdfs namenode &` → `yarn resourcemanager &` → `yarn timelineserver &` → `hdfs datanode &`
   → `yarn nodemanager &` → Spark History Server → `tail -f /dev/null`.
-* Тома: `namenode-data`, `namenode-logs`, `datanode-data`, `datanode-logs`, `timeline-data` — все
-  переезжают в этот сервис без переименования.
+* Тома: `namenode-data`, `datanode-data`, `timeline-data` переезжают в этот сервис без переименования;
+  `namenode-logs` и `datanode-logs` заменяются одним общим томом `hadoop-logs` — шесть демонов
+  (NameNode, DataNode, ResourceManager, NodeManager, Timeline Server, Spark History) пишут файловые
+  логи в него совместно, раздельных лог-томов на демон в реализации больше нет.
 * Старые `base/scripts/start-namenode.sh` и `start-datanode.sh` удаляются.
   `spark/scripts/start-spark-history.sh` **остаётся файлом и вызывается** из нового скрипта — его
   содержимое не инлайнится, чтобы не дублировать логику запуска History Server.
@@ -193,8 +195,11 @@ PostgreSQL, отдельный контейнер под статический 
   контейнера. Для локального стенда приемлемо, но это регресс, и он фиксируется здесь явно.
 * **Гранулярность рестарта падает.** `docker restart hadoop-datanode` больше не существует —
   перезапускается весь `hadoop-node`. То же для метастора отдельно от HiveServer2.
-* **Диагностика по логам усложняется**: `docker logs hadoop-node` смешивает вывод шести демонов.
-  Файловые логи в томах `namenode-logs` / `datanode-logs` остаются раздельными и это смягчает.
+* **Диагностика по логам усложняется**: `docker logs hadoop-node` смешивает вывод шести демонов, и
+  это ничем не смягчается — том `hadoop-logs` общий на все шесть демонов, раздельных лог-томов по
+  демону в реализации нет. Демоны в `start-hadoop.sh` запускаются напрямую (`hdfs namenode &` и т.д.,
+  не через `hadoop-daemon.sh`), поэтому пишут в консоль, а не в отдельные файлы `*-namenode-*.log` —
+  единственный способ разобрать вывод конкретного демона это `docker logs hadoop-node`.
 
 ## 7. Ожидаемый эффект
 
