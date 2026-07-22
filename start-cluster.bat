@@ -2,8 +2,8 @@
 setlocal EnableExtensions EnableDelayedExpansion
 set DOCKER_BUILDKIT=1
 set COMPOSE_DOCKER_CLI_BUILD=1
-rem Defensive default: if a future path lands at :print_help without setting HELP_EXIT,
-rem treat it as an error (same posture as the unknown-arg branch).
+rem Дефолт на случай, если новая ветка кода придёт к :print_help, не задав
+rem HELP_EXIT: считаем это ошибкой, как и неизвестный аргумент.
 set "HELP_EXIT=2"
 
 set "REGISTRY=fufa242"
@@ -46,7 +46,12 @@ if not defined BASE_REMOTE (
     exit /b 1
 )
 
-set "BUILD_SERVICES="
+rem Очереди сборки по уровням зависимостей: T1 = base, T2 = FROM base,
+rem T3 = FROM spark. Собираются последовательно, иначе дочерний образ может
+rem начать сборку раньше, чем локально появится тег его FROM.
+set "BUILD_T1="
+set "BUILD_T2="
+set "BUILD_T3="
 set "FORCE_BUILD=0"
 set "CLEAN=0"
 
@@ -79,9 +84,9 @@ goto :parse_args
 :args_done
 
 rem ===========================================================================
-rem Logfile: every stage's stdout/stderr streams here. The spinner renderer
-rem (scripts\run-stage.ps1) reads its tail to display the in-flight step.
-rem On hard failure the caller prints the path and tails the last 30 lines.
+rem Лог: сюда стекается stdout/stderr всех этапов. Спиннер (scripts\run-stage.ps1)
+rem читает его хвост, чтобы показать текущий шаг; при падении печатается путь к
+rem логу и последние 30 строк.
 rem ===========================================================================
 if not exist ".\logs" mkdir ".\logs" >nul 2>nul
 for /f "usebackq tokens=*" %%T in (`powershell -NoProfile -Command "(Get-Date).ToString('yyyyMMdd-HHmmss')"`) do set "LOG_TS=%%T"
@@ -97,7 +102,7 @@ if "%FORCE_BUILD%"=="1" (
 )
 
 rem ===========================================================================
-rem Stage 1: stop containers (with optional --clean prune)
+rem Этап 1: остановка контейнеров (с очисткой по --clean)
 rem ===========================================================================
 if "%CLEAN%"=="1" (
     call :run_stage "[1/!TOTAL!] Stopping containers and removing volumes" "%DC% down -v --remove-orphans"
@@ -113,62 +118,56 @@ if "%FORCE_BUILD%"=="1" goto :force_build_all
 goto :try_pull_then_build
 
 rem ===========================================================================
-rem Path B (--build): three build stages, each with its own spinner.
-rem Dependency graph:
-rem   stage 2: base
-rem   stage 3: spark-image, hive-metastore  (both FROM base, run in parallel)
-rem   stage 4: jupyter, kyuubi              (both FROM spark, run in parallel)
-rem No --pull: local FROM images (hadoop-cluster-base/spark) are not in any registry.
+rem Путь B (--build): три этапа сборки по графу зависимостей:
+rem   этап 2: base
+rem   этап 3: spark-image, hive-metastore  (оба FROM base)
+rem   этап 4: jupyter, kyuubi, airflow     (оба FROM spark, airflow копирует из них)
+rem --pull не используем: локальные FROM-образы стенда не лежат в registry.
 rem ===========================================================================
 :force_build_all
 call :run_stage "[2/!TOTAL!] Building base" "%DC% build base"
 if errorlevel 1 exit /b 1
-rem `docker compose` v2 builds independent services in parallel by default and
-rem does not expose --parallel in its help; v1 needed it explicitly but is
-rem deprecated, and on modern Docker Desktop the `docker-compose` binary is just
-rem a v2 shim. We never pass --parallel - it's redundant where supported and
-rem not accepted by current versions where it isn't.
+rem --parallel не передаём: docker compose v2 собирает независимые сервисы
+rem параллельно сам и такого флага не принимает.
 call :run_stage "[3/!TOTAL!] Building spark-image, hive-metastore" "%DC% build spark-image hive-metastore"
 if errorlevel 1 exit /b 1
-call :run_stage "[4/!TOTAL!] Building jupyter, kyuubi" "%DC% build jupyter kyuubi"
+call :run_stage "[4/!TOTAL!] Building jupyter, kyuubi, airflow" "%DC% build jupyter kyuubi airflow-image"
 if errorlevel 1 exit /b 1
 goto :verify_images
 
 rem ===========================================================================
-rem Path A (default): pull prebuilt images from Docker Hub, build only the ones
-rem that failed to pull. Each pull gets its own spinner; failures fall back to
-rem the build queue silently (no tail of log).
-rem
-rem Note: this stage intentionally breaks the "one spinner per stage" pattern -
-rem during a multi-minute pull of 5 images, per-image visibility is more useful
-rem than a single line that just says "Pulling images". The build path elsewhere
-rem stays one-spinner-per-stage.
+rem Путь A (по умолчанию): тянем готовые образы из Docker Hub, собираем только
+rem те, что не стянулись. Неудачный pull молча уходит в очередь сборки.
 rem ===========================================================================
 :try_pull_then_build
 echo.
 echo [2/!TOTAL!] Pulling images from Docker Hub
-call :pull_or_mark base "%BASE_REMOTE%" "%BASE_IMAGE%"
-call :pull_or_mark spark-image "%SPARK_REMOTE%" "%SPARK_IMAGE%"
-call :pull_or_mark hive-metastore "%HIVE_REMOTE%" "%HIVE_IMAGE%"
-call :pull_or_mark jupyter "%JUPYTER_REMOTE%" "%JUPYTER_IMAGE%"
-call :pull_or_mark kyuubi "%KYUUBI_REMOTE%" "%KYUUBI_IMAGE%"
+call :pull_or_mark base "%BASE_REMOTE%" "%BASE_IMAGE%" 1
+call :pull_or_mark spark-image "%SPARK_REMOTE%" "%SPARK_IMAGE%" 2
+call :pull_or_mark hive-metastore "%HIVE_REMOTE%" "%HIVE_IMAGE%" 2
+call :pull_or_mark jupyter "%JUPYTER_REMOTE%" "%JUPYTER_IMAGE%" 3
+call :pull_or_mark kyuubi "%KYUUBI_REMOTE%" "%KYUUBI_IMAGE%" 3
+call :pull_or_mark airflow-image "%AIRFLOW_REMOTE%" "%AIRFLOW_IMAGE%" 3
 
-if defined BUILD_SERVICES (
-    call :run_stage "[3/!TOTAL!] Building missing images: !BUILD_SERVICES!" "%DC% build !BUILD_SERVICES!"
-    if errorlevel 1 exit /b 1
-) else (
+if not defined BUILD_T1 if not defined BUILD_T2 if not defined BUILD_T3 (
     echo.
     echo [3/!TOTAL!] Build skipped - all images pulled.
     >> "%LOG_FILE%" echo [3/!TOTAL!] Build skipped - all images pulled.
+    goto :verify_images
 )
+call :build_tier "!BUILD_T1!" "[3/!TOTAL!] Building missing images"
+if errorlevel 1 exit /b 1
+call :build_tier "!BUILD_T2!" "[3/!TOTAL!] Building missing images"
+if errorlevel 1 exit /b 1
+call :build_tier "!BUILD_T3!" "[3/!TOTAL!] Building missing images"
+if errorlevel 1 exit /b 1
 
 :verify_images
-rem Sanity-check that all required local image tags exist before 'up -d --no-build'.
-rem Catches drift if image-tags.ps1 ever stops aligning BASE_IMAGE/etc. with the
-rem hardcoded FROM in child Dockerfiles.
+rem Перед 'up -d --no-build' проверяем, что все нужные локальные теги на месте:
+rem ловим расхождение image-tags.ps1 с захардкоженными FROM дочерних Dockerfile'ов.
 <nul set /p "_=Verifying image tags... "
 set "VERIFY_FAIL=0"
-for %%I in ("%BASE_IMAGE%" "%SPARK_IMAGE%" "%HIVE_IMAGE%" "%JUPYTER_IMAGE%" "%KYUUBI_IMAGE%") do (
+for %%I in ("%BASE_IMAGE%" "%SPARK_IMAGE%" "%HIVE_IMAGE%" "%JUPYTER_IMAGE%" "%KYUUBI_IMAGE%" "%AIRFLOW_IMAGE%") do (
     docker image inspect %%I >> "%LOG_FILE%" 2>&1
     if errorlevel 1 (
         set "VERIFY_FAIL=1"
@@ -184,14 +183,14 @@ if "!VERIFY_FAIL!"=="1" (
 echo OK
 
 rem ===========================================================================
-rem Stage N-1: start services
+rem Предпоследний этап: запуск сервисов
 rem ===========================================================================
 set /a "STAGE_UP=TOTAL - 1"
 call :run_stage "[!STAGE_UP!/!TOTAL!] Starting services" "%DC% up -d --no-build"
 if errorlevel 1 exit /b 1
 
 rem ===========================================================================
-rem Stage N: health checks (HDFS + Hive share the final stage index)
+rem Последний этап: health-check'и (HDFS и Hive делят один номер этапа)
 rem ===========================================================================
 call :run_stage "[!TOTAL!/!TOTAL!] Health check: HDFS" "docker exec %NAMENODE_CONTAINER% /opt/scripts/check-hdfs.sh"
 if errorlevel 1 exit /b 1
@@ -213,15 +212,17 @@ echo - Spark History:         http://localhost:18080
 echo.
 echo Web interfaces (direct):
 echo - JupyterLab:            http://localhost:8888
+echo - Airflow:               http://localhost:8080  (default login: admin/admin)
 echo.
 echo Test scripts:
 echo - HDFS tests:        .\tests\test-hdfs.bat
 echo - YARN tests:        .\tests\test-yarn.bat
 echo - Full cluster test: .\tests\test-cluster.bat
+echo - Airflow tests:     .\tests\test-airflow.bat
 exit /b 0
 
 rem ===========================================================================
-rem Helpers
+rem Вспомогательные подпрограммы
 rem ===========================================================================
 
 :show_help
@@ -249,39 +250,43 @@ echo Logs: full stdout/stderr of every stage goes to .\logs\start-cluster-*.log
 exit /b %HELP_EXIT%
 
 :pull_or_mark
-rem %~1 = service name, %~2 = remote tag, %~3 = local tag.
-rem Soft-fail mode: -NoTailOnFail keeps the screen clean when a pull misses and
-rem we silently fall back to building. The build stage still produces a proper
-rem failure dump if it can't recover.
+rem %~1 = сервис, %~2 = удалённый тег, %~3 = локальный тег, %~4 = уровень сборки (1..3).
+rem -NoTailOnFail: промах pull'а не засоряет экран, дамп лога всё равно даст
+rem этап сборки, если и он не справится.
 >> "%LOG_FILE%" echo === STAGE: pull %~1 === %TIME%
 powershell -NoProfile -ExecutionPolicy Bypass -File ".\scripts\run-stage.ps1" -Label "   %~1" -LogFile "%LOG_FILE%" -Command "docker pull %~2" -NoTailOnFail
 if errorlevel 1 (
-    if defined BUILD_SERVICES (
-        set "BUILD_SERVICES=!BUILD_SERVICES! %~1"
-    ) else (
-        set "BUILD_SERVICES=%~1"
-    )
+    call :mark_for_build "%~1" "%~4"
     exit /b 0
 )
 docker tag %~2 %~3 >> "%LOG_FILE%" 2>&1
 if errorlevel 1 (
     echo    %~1: tag step failed, will rebuild locally
-    if defined BUILD_SERVICES (
-        set "BUILD_SERVICES=!BUILD_SERVICES! %~1"
-    ) else (
-        set "BUILD_SERVICES=%~1"
-    )
+    call :mark_for_build "%~1" "%~4"
     exit /b 0
 )
 exit /b 0
 
+:mark_for_build
+rem %~1 = сервис, %~2 = уровень сборки (1..3).
+if defined BUILD_T%~2 (
+    set "BUILD_T%~2=!BUILD_T%~2! %~1"
+) else (
+    set "BUILD_T%~2=%~1"
+)
+exit /b 0
+
+:build_tier
+rem %~1 = сервисы одного уровня зависимостей (может быть пусто), %~2 = метка этапа.
+if "%~1"=="" exit /b 0
+call :run_stage "%~2: %~1" "%DC% build %~1"
+exit /b %errorlevel%
+
 :run_stage
-rem %~1 = stage label, %~2 = single command string.
-rem Writes a stage marker to the log here (in cmd's OEM encoding, matching the
-rem encoding of the docker output that follows), then delegates to run-stage.ps1
-rem which streams the command's stdout/stderr to %LOG_FILE% and draws a single
-rem in-place spinner with the current step extracted from the log tail. On
-rem failure the helper prints the log tail itself.
+rem %~1 = метка этапа, %~2 = одна командная строка.
+rem Маркер этапа пишем здесь (в OEM-кодировке cmd, как и вывод docker следом),
+rem дальше run-stage.ps1 льёт stdout/stderr команды в %LOG_FILE%, рисует спиннер
+rem и при падении сам печатает хвост лога.
 >> "%LOG_FILE%" echo === STAGE: %~1 === %TIME%
 powershell -NoProfile -ExecutionPolicy Bypass -File ".\scripts\run-stage.ps1" -Label "%~1" -LogFile "%LOG_FILE%" -Command "%~2"
 exit /b %errorlevel%

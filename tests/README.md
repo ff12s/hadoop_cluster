@@ -1,89 +1,101 @@
-# Hadoop Cluster Test Scripts
+# Тестовые скрипты кластера Hadoop
 
-This directory contains .bat scripts for managing and testing the Hadoop cluster.
+В этом каталоге лежат .bat-скрипты для управления стендом и его проверки.
 
-## 📁 Files
+## 📁 Файлы
 
-### 🚀 Cluster Management
-- **`../start-cluster.bat`** - Start cluster with image rebuild (in root)
-- **`../stop-cluster.bat`** - Stop cluster with optional cleanup (in root)
+### 🚀 Управление кластером
+- **`../start-cluster.bat`** — запуск кластера с пересборкой образов (в корне репозитория)
+- **`../stop-cluster.bat`** — остановка кластера с опциональной очисткой (в корне репозитория)
 
-### 🧪 Testing
-- **`test-cluster.bat`** - Complete cluster testing
-- **`test-hdfs.bat`** - HDFS components testing only
-- **`test-yarn.bat`** - YARN components testing only
+### 🧪 Тесты
+- **`test-cluster.bat`** — полная проверка кластера
+- **`test-hdfs.bat`** — только компоненты HDFS
+- **`test-yarn.bat`** — только компоненты YARN
+- **`test-airflow.bat`** — только оркестрация Airflow
 
-## 🎯 Usage
+## 🎯 Использование
 
-### Quick Start
-1. Run `../start-cluster.bat` to start the cluster
-2. Wait for completion (30 seconds)
-3. Run `test-cluster.bat` to verify
+### Быстрый старт
+1. Запустите `../start-cluster.bat`
+2. Дождитесь завершения (около 30 секунд)
+3. Запустите `test-cluster.bat` для проверки
 
-### Step-by-step Testing
-1. `test-hdfs.bat` - test HDFS operations
-2. `test-yarn.bat` - test YARN and MapReduce
-3. `test-cluster.bat` - comprehensive testing
+### Пошаговая проверка
+1. `test-hdfs.bat` — операции HDFS
+2. `test-yarn.bat` — YARN и MapReduce
+3. `test-airflow.bat` — DAG'и Airflow на YARN (прогоняет оба DAG'а, занимает несколько минут)
+4. `test-cluster.bat` — комплексная проверка
 
-### Shutdown
-- `../stop-cluster.bat` - stop with data cleanup option
+### Остановка
+- `../stop-cluster.bat` — остановка с возможностью удалить данные
 
-## 🌐 Web Interfaces
+## 🌐 Веб-интерфейсы
 
-Available after cluster startup:
+Доступны после запуска кластера:
 
-| Service | URL | Description |
-|---------|-----|-------------|
-| HDFS NameNode | http://localhost:9870 | HDFS Management |
-| YARN ResourceManager | http://localhost:8088 | Resource Management |
-| HDFS DataNode | http://localhost:9864 | DataNode Status |
-| YARN NodeManager | http://localhost:8042 | NodeManager Status |
+| Сервис | URL | Описание |
+|--------|-----|----------|
+| HDFS NameNode | http://localhost:9870 | Управление HDFS |
+| YARN ResourceManager | http://localhost:8088 | Управление ресурсами |
+| HDFS DataNode | http://localhost:9864 | Состояние DataNode |
+| YARN NodeManager | http://localhost:8042 | Состояние NodeManager |
+| Airflow | http://localhost:8080 | Оркестрация DAG'ов (учётка по умолчанию `admin` / `admin`) |
 
-## 📊 What's Tested
+## 📊 Что проверяется
 
-### HDFS Tests:
-- ✅ Container status
-- ✅ NameNode and DataNode processes
-- ✅ HDFS cluster status
-- ✅ Web interface availability
-- ✅ File create/read/write operations
-- ✅ HDFS blocks verification
+### Тесты HDFS:
+- ✅ Состояние контейнеров
+- ✅ Процессы NameNode и DataNode
+- ✅ Состояние кластера HDFS
+- ✅ Доступность веб-интерфейса
+- ✅ Создание, чтение и запись файлов
+- ✅ Проверка блоков HDFS
 
-### YARN Tests:
-- ✅ ResourceManager and NodeManager status
-- ✅ YARN nodes list
-- ✅ Applications list
-- ✅ Web interface availability
-- ✅ MapReduce job execution (WordCount)
-- ✅ Resources and queues verification
+### Тесты YARN:
+- ✅ Состояние ResourceManager и NodeManager
+- ✅ Список узлов YARN
+- ✅ Список приложений
+- ✅ Доступность веб-интерфейса
+- ✅ Запуск MapReduce-джобы (WordCount)
+- ✅ Проверка ресурсов и очередей
 
-### General Tests:
-- ✅ Network connectivity between containers
-- ✅ HDFS and YARN integration
-- ✅ Log verification
-- ✅ Comprehensive operation testing
+### Тесты Airflow:
+- ✅ Health контейнеров webserver и scheduler
+- ✅ spark-submit / yarn / java в образе, непустые файлы джоб в `/opt/airflow/jobs` и ожидаемая сигнатура Spark-провайдера
+- ✅ Отсутствие ошибок импорта DAG'ов и регистрация обоих DAG'ов
+- ✅ Успешный прогон `spark_pi_dag` и `spark_etl_dag` (на время прогона DAG'и ставятся на паузу, состояния тасок проверяются явно)
+- ✅ Приложение YARN именно этого прогона (id разбирается из лога таски) дошло до SUCCEEDED
+- ✅ raw.parquet и agg.parquet записаны в HDFS
+- ✅ Лайнидж доехал до Marquez, и `agg.parquet` обновлён этим прогоном (а не остался от предыдущего)
 
-## ⚠️ Requirements
+### Общие тесты:
+- ✅ Сетевая связность между контейнерами
+- ✅ Интеграция HDFS и YARN
+- ✅ Проверка логов
+- ✅ Комплексная проверка работы
 
-- Docker Desktop for Windows
+## ⚠️ Требования
+
+- Docker Desktop для Windows
 - Docker Compose
-- curl (usually built into Windows 10+)
+- curl (входит в Windows 10+)
 
-## 🔧 Troubleshooting
+## 🔧 Устранение неполадок
 
-### If cluster doesn't start:
-1. Check that Docker Desktop is running
-2. Ensure ports 9870, 8088, 9864, 8042 are free
-3. Run `../stop-cluster.bat` with cleanup and try again
+### Кластер не запускается:
+1. Проверьте, что Docker Desktop запущен
+2. Убедитесь, что порты 9870, 8088, 9864, 8042 свободны
+3. Запустите `../stop-cluster.bat` с очисткой и повторите
 
-### If tests fail:
-1. Wait for full service startup (30+ seconds)
-2. Check logs: `docker-compose logs`
-3. Restart the cluster
+### Тесты падают:
+1. Дождитесь полного запуска сервисов (30+ секунд)
+2. Посмотрите логи: `docker-compose logs`
+3. Перезапустите кластер
 
-## 📝 Logs
+## 📝 Логи
 
-Container logs can be viewed with:
+Логи контейнеров смотрятся так:
 ```bash
 docker-compose logs namenode
 docker-compose logs datanode

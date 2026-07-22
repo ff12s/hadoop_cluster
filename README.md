@@ -10,6 +10,7 @@
 - **Spark 3.5.2** — Обработка данных и машинное обучение
 - **JupyterLab** — Интерактивная разработка с PySpark и Scala
 - **Kyuubi 1.10.2** — Spark SQL через JDBC/Thrift
+- **Airflow 2.6.3** — Оркестрация Spark-джоб на YARN
 - **OpenLineage** — Трассировка данных (Marquez)
 - **Nginx** — Реверс-прокси для всех веб-интерфейсов
 - **Java 8**, **Python 3.12**, **Scala 2.13.8**
@@ -41,6 +42,8 @@ docker compose down
 
 Все веб-интерфейсы доступны через Nginx реверс-прокси — внутренние hostname контейнеров автоматически заменяются на `localhost`.
 
+> Стенд рассчитан только на локальный запуск: сервисы поднимаются с дефолтными учётками и портами, слушающими все интерфейсы. Не выставляйте его в сеть.
+
 | Сервис | URL | Описание |
 |--------|-----|----------|
 | HDFS NameNode | http://localhost:9870 | Управление файловой системой |
@@ -52,6 +55,7 @@ docker compose down
 | Spark History Server | http://localhost:18080 | История Spark-приложений |
 | HiveServer2 Web UI | http://localhost:10002 | Веб-интерфейс Hive |
 | JupyterLab | http://localhost:8888 | Интерактивная разработка |
+| Airflow | http://localhost:8080 | Оркестрация DAG'ов (учётка по умолчанию `admin` / `admin`) |
 | Marquez Web | http://localhost:3000 | Трассировка данных |
 | Marquez API | http://localhost:5000 | API для трассировки |
 
@@ -111,6 +115,13 @@ hadoop_cluster/
 │   ├── scripts/             # Скрипты запуска
 │   ├── .dockerignore
 │   └── Dockerfile
+├── airflow/                 # Airflow (webserver + scheduler)
+│   ├── dags/                # spark_pi_dag, spark_etl_dag
+│   ├── jobs/                # PySpark-джобы для DAG'ов
+│   ├── scripts/             # init-airflow.sh, ensure_db.py
+│   ├── logs/                # Логи задач (монтируются, не коммитятся)
+│   ├── .dockerignore
+│   └── Dockerfile
 ├── marquez/                 # OpenLineage
 │   └── config/              # config.yml
 ├── nginx/                   # Реверс-прокси
@@ -146,12 +157,13 @@ copy env_example .env
 | `PYTHON_VERSION` | `3.12.7` | Python |
 | `KYUUBI_VERSION` | `1.10.2` | Apache Kyuubi |
 | `JUPYTER_VERSION` | `4.3.0` | JupyterLab (`jupyterlab==` в образе) |
+| `AIRFLOW_VERSION` | `2.6.3` | Apache Airflow (образ `apache/airflow:<version>-python3.10`) |
 | `JAVA_VERSION` | `8` | Java (OpenJDK) |
 
 #### OpenLineage
 | Переменная | Значение | Описание |
 |------------|----------|----------|
-| `OPENLINEAGE_VERSION` | `1.37.0` | Версия OpenLineage |
+| `OPENLINEAGE_VERSION` | `1.46.0` | Версия OpenLineage |
 | `OPENLINEAGE_NAMESPACE` | `hadoop-cluster` | Пространство имён |
 
 ## Подключения
@@ -182,6 +194,38 @@ copy env_example .env
 - Откройте http://localhost:8888
 - Доступны ядра: Python (PySpark), Scala (Toree)
 - Автоматически подключён к YARN
+
+### Airflow
+
+Оркестратор для запуска Spark-джоб на YARN. UI: http://localhost:8080, учётка по умолчанию `admin` / `admin`
+(переопределяется `AIRFLOW_ADMIN_USER` / `AIRFLOW_ADMIN_PASSWORD`).
+
+- Версия задаётся `AIRFLOW_VERSION` в `.env` (по умолчанию `2.6.3`).
+- DAG'и и джобы лежат в `airflow/dags` и `airflow/jobs`, смонтированы в контейнеры — правка не требует пересборки образа.
+- `spark_pi_dag` — smoke-проверка связки Airflow → spark-submit → YARN.
+- `spark_etl_dag` — генерация и агрегация parquet в HDFS; лайнидж уезжает в Marquez. Джобы регистрируются
+  в job-неймспейсе `hadoop-cluster`, а сами датасеты (raw.parquet, agg.parquet) — в неймспейсе URI
+  хранилища `hdfs://namenode:9000` (это неймспейс, в котором их искать через `GET /api/v1/namespaces/...`).
+- Метаданные Airflow живут в общем контейнере `hadoop-postgres` (база `airflow`), её создаёт сервис `airflow-init`,
+  дождавшись healthcheck'а Postgres. Имя роли, пароль и базу можно переопределить в `.env`
+  (`AIRFLOW_DB_USER`, `AIRFLOW_DB_PASSWORD`, `AIRFLOW_DB_NAME`; все они перечислены закомментированными
+  в `env_example`) — из них же собирается строка подключения Airflow.
+  Пароль подставляется в URI `postgresql+psycopg2://user:pass@host:port/db` как есть, поэтому символы `@ : / # ?`
+  в нём использовать нельзя. Смена `AIRFLOW_DB_PASSWORD` на уже инициализированном стенде подхватывается:
+  `airflow-init` при каждом запуске приводит пароль роли к текущему значению.
+- Учётка UI задаётся `AIRFLOW_ADMIN_USER` / `AIRFLOW_ADMIN_PASSWORD` и создаётся **один раз**, при первичной
+  инициализации; позже пароль меняется только через UI или `airflow users delete` + пересоздание.
+- Шифрование секретов в базе метаданных по умолчанию выключено (`AIRFLOW__CORE__FERNET_KEY` пуст) — пароли
+  и `extra` коннекшенов, значения Variable лежат в Postgres открытым текстом. Для реальных кредов задайте
+  `AIRFLOW_FERNET_KEY` в `.env` (`python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`).
+- Коннекшен `spark_yarn` задаётся переменной окружения `AIRFLOW_CONN_SPARK_YARN` в `docker-compose.yml`
+  (`spark://yarn?deploy-mode=cluster&spark-binary=spark-submit`). Такие коннекшены Airflow резолвит раньше базы
+  метаданных и в UI (Admin → Connections) не показывает: одноимённый коннекшен, созданный через UI, ни на что не
+  повлияет — менять параметры подключения к YARN нужно в compose.
+- Джобы отправляются в `deploy-mode=cluster`: `spark-defaults.conf` указывает на интерпретатор `/opt/python/bin/python3`, которого в образе Airflow нет, поэтому драйвер должен уезжать в YARN.
+- Джобы в образ не копируются — они приезжают только маунтами `./airflow/jobs` и `./spark/scripts/pyspark_pi.py`
+  (последний монтируется поверх каталога), поэтому источник правды у них один: рабочая копия репозитория.
+- Образ большой (~2.5 ГБ): в него копируются дистрибутивы Spark и Hadoop.
 
 ## Хранилище данных
 
@@ -223,6 +267,7 @@ tests\test-cluster.bat
 | Hive | `tests\test-hive.bat` | HiveServer2, создание таблиц, SQL-запросы, Metastore |
 | Kyuubi | `tests\test-kyuubi.bat` | Beeline, Spark SQL таблицы, приложения в YARN |
 | OpenLineage | `tests\test-openlineage.bat` | Marquez API, трассировка Spark, метаданные |
+| Airflow | `tests\test-airflow.bat` | Health контейнеров, импорт DAG'ов, прогон обоих DAG'ов, артефакты в HDFS и лайнидж |
 
 ## Ручное управление
 
@@ -232,7 +277,7 @@ tests\test-cluster.bat
 # Вычислить теги (dry-run)
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\push-images.ps1 -DryRun
 
-# Tag + push всех образов (base, spark, hive-metastore, jupyter, kyuubi)
+# Tag + push всех образов (base, spark, hive-metastore, jupyter, kyuubi, airflow)
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\push-images.ps1
 ```
 
@@ -255,6 +300,9 @@ docker compose build jupyter
 
 # Kyuubi образ
 docker compose build kyuubi
+
+# Airflow образ (копирует /opt/spark и /opt/hadoop из уже собранных образов стенда)
+docker compose build airflow-image
 ```
 
 ### Управление сервисами
@@ -329,6 +377,7 @@ docker exec hadoop-kyuubi beeline -u 'jdbc:hive2://localhost:10009' -n hadoop -e
 | 5433 | Marquez PostgreSQL |
 | 5434 | Hive Metastore PostgreSQL |
 | 8042 | YARN NodeManager UI |
+| 8080 | Airflow Web UI |
 | 8088 | YARN ResourceManager UI |
 | 8188 | YARN Timeline Server |
 | 8888 | JupyterLab |

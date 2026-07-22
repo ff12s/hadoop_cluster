@@ -12,4 +12,19 @@
 sparketl/
 .claude/
 logs/
+!airflow/logs/
 .mcp.json
+__pycache__/
+*.log
+
+# Собранный resolver-jar монтируется в стенд, но не коммитится
+spark/jars/*.jar
+
+# Логи Airflow монтируются в стенд, но не коммитятся
+airflow/logs/*
+!airflow/logs/.gitkeep
+
+# Точка монтирования от вложенного bind-mount (docker-compose.yml монтирует
+# spark/scripts/pyspark_pi.py поверх каталога airflow/jobs) — Docker создаёт
+# здесь пустой файл-заглушку на хосте при пересоздании контейнеров
+airflow/jobs/pyspark_pi.py

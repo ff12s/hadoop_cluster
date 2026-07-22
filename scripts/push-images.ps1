@@ -6,8 +6,9 @@
   - hive:     h{Hadoop}-hive{Hive}-tez{Tez}
   - jupyter:  s{Spark}-py{PyM.m}-jlab{JupyterLab}
   - kyuubi:   k{Kyuubi}-s{Spark}
+  - airflow:  a{Airflow}-s{Spark}
 
-  Перед push: docker compose build base spark-image hive-metastore jupyter kyuubi
+  Перед push: docker compose build base spark-image hive-metastore jupyter kyuubi airflow-image
   и docker login.
 #>
 param(
@@ -30,6 +31,7 @@ $mappings = @(
     @{ Name = "hive-metastore";  Local = $t.HIVE_IMAGE;    Remote = $t.HIVE_REMOTE }
     @{ Name = "jupyter";         Local = $t.JUPYTER_IMAGE; Remote = $t.JUPYTER_REMOTE }
     @{ Name = "kyuubi";          Local = $t.KYUUBI_IMAGE;  Remote = $t.KYUUBI_REMOTE }
+    @{ Name = "airflow";         Local = $t.AIRFLOW_IMAGE; Remote = $t.AIRFLOW_REMOTE }
 )
 
 Write-Host "Computed tags:"
