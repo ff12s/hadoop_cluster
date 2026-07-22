@@ -3,7 +3,8 @@ echo ========================================
 echo Kyuubi Testing
 echo ========================================
 
-docker ps --format "{{.Names}}" | findstr /b /c:"hadoop-kyuubi" >nul
+rem /e якорит конец строки: без него имя вроде hadoop-kyuubi-standby дало бы ложное совпадение
+docker ps --format "{{.Names}}" | findstr /b /e /c:"hadoop-kyuubi" >nul
 if errorlevel 1 (
     echo ERROR: container hadoop-kyuubi is not running.
     echo Kyuubi lives behind an opt-in compose profile.

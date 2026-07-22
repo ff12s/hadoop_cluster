@@ -25,11 +25,17 @@
 ### Запуск кластера
 
 ```bash
-# Полный запуск: pull из Docker Hub, при отсутствии тега — build, затем запуск + health-check
+# Полный запуск: pull из Docker Hub, при отсутствии тега — build, затем запуск + health-check.
+# Поднимает семь основных сервисов; kyuubi и jupyter остаются выключенными.
 start-cluster.bat
 
 # Полный запуск с очисткой volumes
-start-cluster.bat clean
+start-cluster.bat --clean
+
+# Дополнительно поднять опциональные сервисы
+start-cluster.bat --with-kyuubi
+start-cluster.bat --with-jupyter
+start-cluster.bat --all
 
 # Остановка
 docker compose stop
@@ -37,6 +43,18 @@ docker compose stop
 # Остановка с удалением контейнеров
 docker compose down
 ```
+
+> ⚠️ **При переходе со старой раскладки стенда требуется разовый `start-cluster.bat --clean`.**
+> Роль и база `marquez` создаются init-скриптом PostgreSQL, а он выполняется только на пустом
+> томе данных. Без очистки база не появится и Marquez не поднимется. Очистка стирает HDFS,
+> hive warehouse, метаданные Airflow и историю Marquez.
+
+> ⚠️ **Изменили что-то в `base/`, `hive/`, `spark/`, `jupyter/`, `kyuubi/` или `airflow/` —
+> переиздайте образы.** Без флага `--build` скрипт тянет готовые образы с Docker Hub и
+> **перетирает ими локально собранные теги**. Если опубликованные образы отстали от
+> репозитория, стенд падает на старте (например, `stat /opt/scripts/start-hadoop.sh:
+> no such file or directory`). Порядок: `start-cluster.bat --build --all`, убедиться что стенд
+> поднялся, затем `powershell -File scripts\push-images.ps1`.
 
 ### Опциональные сервисы: Kyuubi и Jupyter
 
@@ -46,7 +64,11 @@ docker compose down
 и `jupyter` и по умолчанию не стартуют.
 
 ```bash
-# Поднять стенд вместе с kyuubi и/или jupyter
+# Рекомендуемый способ — флаги скрипта запуска
+start-cluster.bat --with-kyuubi
+start-cluster.bat --all
+
+# Напрямую через compose
 docker compose --profile kyuubi --profile jupyter up -d
 
 # То же самое через переменную окружения
@@ -56,6 +78,10 @@ COMPOSE_PROFILES=kyuubi,jupyter docker compose up -d
 > ⚠️ `docker compose down` **не останавливает** контейнеры выключенных профилей —
 > это документированное поведение Docker Compose. Если стенд был поднят с профилями,
 > гасите его с теми же профилями: `COMPOSE_PROFILES=kyuubi,jupyter docker compose down`.
+>
+> `start-cluster.bat` эту ловушку закрывает сам: этап остановки он всегда выполняет со
+> всеми профилями, поэтому обычный `start-cluster.bat` без флагов снимает и ранее
+> поднятые `kyuubi` с `jupyter`, а не оставляет их занимать память.
 
 ## Веб-интерфейсы
 
