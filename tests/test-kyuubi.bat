@@ -24,7 +24,7 @@ for /l %%i in (1,1,20) do (
 
 echo.
 echo 5. Testing connection via Beeline (engine Spark on YARN, SQL DDL/DML)...
-docker exec hadoop-hiveserver2 bash -lc "beeline -u 'jdbc:hive2://kyuubi:10009' -n hadoop -e \"set spark.sql.shuffle.partitions=2; DROP DATABASE IF EXISTS kyuubi_db CASCADE; CREATE DATABASE kyuubi_db; USE kyuubi_db; CREATE TABLE IF NOT EXISTS kyuubi_table (id INT, name STRING); INSERT INTO kyuubi_table VALUES (1, 'k1'), (2, 'k2'); SELECT COUNT(*) AS cnt FROM kyuubi_table; SELECT * FROM kyuubi_table ORDER BY id;\""
+docker exec hadoop-hive bash -lc "beeline -u 'jdbc:hive2://kyuubi:10009' -n hadoop -e \"set spark.sql.shuffle.partitions=2; DROP DATABASE IF EXISTS kyuubi_db CASCADE; CREATE DATABASE kyuubi_db; USE kyuubi_db; CREATE TABLE IF NOT EXISTS kyuubi_table (id INT, name STRING); INSERT INTO kyuubi_table VALUES (1, 'k1'), (2, 'k2'); SELECT COUNT(*) AS cnt FROM kyuubi_table; SELECT * FROM kyuubi_table ORDER BY id;\""
 
 echo.
 echo 6. Checking HDFS data for kyuubi_table...

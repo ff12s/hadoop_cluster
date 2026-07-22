@@ -1,17 +1,49 @@
 #!/bin/bash
+set -uo pipefail
 
-echo "=== Starting HiveServer2 ==="
+echo "=== Starting Hive (Metastore + HiveServer2) ==="
 
-# Waiting for Hive Metastore readiness
-echo "Waiting for Hive Metastore to be ready..."
-until nc -z hive-metastore 9083; do
-    echo "Metastore not ready, waiting..."
+# --- Метастор ---------------------------------------------------------------
+
+echo "Waiting for PostgreSQL to be ready..."
+until nc -z postgres 5432; do
+    echo "PostgreSQL not ready, waiting..."
     sleep 5
 done
+echo "PostgreSQL is ready!"
 
-echo "Hive Metastore is ready!"
+# Classpath без TEZ: иначе FsTracer/HTrace конфликтуют с Hadoop 3.3, а TEZ метастору не нужен
+export HADOOP_CLASSPATH=$HADOOP_CONF_DIR:$HIVE_HOME/lib/*
 
-# Wait for HDFS to be available and out of safe mode
+echo "Initializing/Upgrading Hive Metastore schema..."
+if schematool -dbType postgres -info >/dev/null 2>&1; then
+  echo "Metastore schema exists. Upgrading if needed..."
+  schematool -dbType postgres -upgradeSchema
+else
+  echo "Metastore schema not found. Initializing..."
+  schematool -dbType postgres -initSchema
+fi
+
+echo "Starting Hive Metastore..."
+$HIVE_HOME/bin/hive --service metastore &
+
+echo "Waiting for Metastore port 9083..."
+for i in {1..24}; do
+  if nc -z localhost 9083; then
+    echo "Hive Metastore is listening on 9083"
+    break
+  fi
+  echo "Waiting for metastore ($i/24)..."
+  sleep 5
+done
+if ! nc -z localhost 9083; then
+  echo "ERROR: metastore did not open port 9083"
+  tail -n 200 /opt/hive/logs/* || true
+  exit 1
+fi
+
+# --- HiveServer2 ------------------------------------------------------------
+
 echo "Waiting for HDFS to be ready..."
 until hdfs dfs -test -d /; do
     echo "HDFS not ready, waiting..."
@@ -21,7 +53,6 @@ done
 echo "Waiting for HDFS to leave safe mode..."
 hdfs dfsadmin -safemode wait
 
-# Upload TEZ libraries to HDFS if not already present
 echo "Checking TEZ libraries in HDFS..."
 hdfs dfs -mkdir -p /apps/tez
 if ! hdfs dfs -test -e /apps/tez/tez.tar.gz; then
@@ -44,11 +75,9 @@ else
     echo "TEZ libraries already present in HDFS"
 fi
 
-# Create TEZ staging directory in HDFS
 hdfs dfs -mkdir -p /tmp/tez/staging
 hdfs dfs -chmod -R 777 /tmp/tez
 
-# Wait for YARN Timeline Server (TEZ/ATS integration can block HiveServer2 until ATS is up)
 echo "Waiting for YARN Timeline Server to be ready..."
 until nc -z namenode 8188; do
     echo "Timeline Server not ready, waiting..."
@@ -56,7 +85,6 @@ until nc -z namenode 8188; do
 done
 echo "YARN Timeline Server is ready!"
 
-# Start HiveServer2 as PID 1, bind to 0.0.0.0
 echo "Starting HiveServer2..."
 export HADOOP_CLASSPATH=$HADOOP_CONF_DIR:$HADOOP_HOME/share/hadoop/common/*:$HADOOP_HOME/share/hadoop/common/lib/*:$HADOOP_HOME/share/hadoop/hdfs/*:$HADOOP_HOME/share/hadoop/hdfs/lib/*:$TEZ_CONF_DIR:$TEZ_HOME/*:$TEZ_HOME/lib/*:$HIVE_HOME/lib/*
 export HIVE_LOG_DIR=/opt/hive/logs

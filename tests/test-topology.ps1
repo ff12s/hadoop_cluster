@@ -64,6 +64,19 @@ Assert-True (-not ($declaredVolumes -contains 'datanode-logs')) "том datanode
 Assert-True ($declaredVolumes -contains 'hadoop-logs') "объявлен единый том hadoop-logs"
 
 Write-Output ""
+Write-Output "== Task 3: merge of hive-metastore and hiveserver2 =="
+Assert-True (-not ($services -contains 'hive-metastore')) "сервис hive-metastore удалён из модели"
+Assert-True (-not ($services -contains 'hiveserver2')) "сервис hiveserver2 удалён из модели"
+Assert-True ($services -contains 'hive') "сервис hive присутствует"
+Assert-True ($cfg.services.hive.container_name -eq 'hadoop-hive') "container_name сервиса hive = hadoop-hive"
+$hiveAliases = @($cfg.services.hive.networks.default.aliases)
+Assert-True ($hiveAliases -contains 'hive-metastore') "hive отвечает на DNS-имя hive-metastore"
+Assert-True ($hiveAliases -contains 'hiveserver2') "hive отвечает на DNS-имя hiveserver2"
+$hivePorts = Get-PublishedPorts $cfg.services.hive
+Assert-True ($hivePorts -contains '9083') "порт 9083 опубликован на hive"
+Assert-True ($hivePorts -contains '10000') "порт 10000 опубликован на hive"
+
+Write-Output ""
 if ($script:Failed -gt 0) {
     Write-Output "FAILED: $script:Failed assertion(s)"
     exit 1

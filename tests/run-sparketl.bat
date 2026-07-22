@@ -50,7 +50,7 @@ docker cp "%ARGS_FILE%" %CONTAINER%:%REMOTE_DIR%/ || exit /b 1
 
 echo.
 echo 3) Ensuring Hive database exists...
-docker exec hadoop-hiveserver2 bash -lc "beeline -u 'jdbc:hive2://hiveserver2:10000' -n hadoop -e \"CREATE DATABASE IF NOT EXISTS %DB_NAME%; SHOW DATABASES LIKE '%DB_NAME%';\"" || (
+docker exec hadoop-hive bash -lc "beeline -u 'jdbc:hive2://hiveserver2:10000' -n hadoop -e \"CREATE DATABASE IF NOT EXISTS %DB_NAME%; SHOW DATABASES LIKE '%DB_NAME%';\"" || (
   echo [ERROR] Failed to ensure Hive database %DB_NAME%. Make sure HiveServer2 is up.
   exit /b 1
 )

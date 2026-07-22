@@ -65,14 +65,14 @@ docker compose down
 ┌───────────────────────────────────────────────────────────────┐
 │                 Nginx Reverse Proxy (webproxy)                │
 │       :9870 :8088 :8188 :9864 :8042 :10002 :9999 :18080       │
-└─────────┬───────────────┬──────────┬────────────────┬─────────┘
-          │               │          │                │
-┌───────────────────┐  ┌─────┐  ┌─────────┐     ┌───────────┐
-│ Hadoop Node       │  │ Tez │  │   Hive  │     │    Hive   │
-│                   │  │  UI │  │ Server2 │     │ Metastore │
-│ - NameNode        │  └─────┘  └─────────┘     └───────────┘
-│ - DataNode        │
-│ - ResourceManager │
+└─────────┬───────────────┬──────────────────┬──────────────────┘
+          │               │                  │
+┌───────────────────┐  ┌─────┐  ┌─────────────────┐
+│ Hadoop Node       │  │ Tez │  │ Hive            │
+│                   │  │  UI │  │                 │
+│ - NameNode        │  └─────┘  │ - Metastore     │
+│ - DataNode        │           │ - HiveServer2   │
+│ - ResourceManager │           └─────────────────┘
 │ - NodeManager     │
 │ - Timeline Server │
 │ - Spark History   │
@@ -104,7 +104,7 @@ hadoop_cluster/
 │   └── Dockerfile
 ├── hive/                    # Hive + Tez (Metastore + HiveServer2 + Tez UI)
 │   ├── config/              # hive-site.xml, tez-site.xml
-│   ├── scripts/             # start-metastore, start-hiveserver2, start-tez-ui
+│   ├── scripts/             # start-hive, start-tez-ui
 │   ├── .dockerignore
 │   └── Dockerfile
 ├── spark/                   # Spark с History Server
@@ -284,7 +284,7 @@ tests\test-cluster.bat
 # Вычислить теги (dry-run)
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\push-images.ps1 -DryRun
 
-# Tag + push всех образов (base, spark, hive-metastore, jupyter, kyuubi, airflow)
+# Tag + push всех образов (base, spark, hive, jupyter, kyuubi, airflow)
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\push-images.ps1
 ```
 
@@ -299,8 +299,8 @@ docker compose build base
 # Spark образ
 docker compose build spark-image
 
-# Hive образ (включает Tez)
-docker compose build hive-metastore
+# Hive образ (включает Tez, Metastore + HiveServer2)
+docker compose build hive
 
 # Jupyter образ
 docker compose build jupyter
@@ -333,7 +333,7 @@ docker compose logs -f
 
 # Логи конкретного сервиса
 docker compose logs -f hadoop
-docker compose logs -f hiveserver2
+docker compose logs -f hive
 docker compose logs -f tez-ui
 ```
 
@@ -366,7 +366,7 @@ docker exec hadoop-node hdfs dfs -ls /
 docker exec hadoop-node yarn node -list
 
 # Hive
-docker exec hadoop-hiveserver2 beeline -u 'jdbc:hive2://localhost:10000' -n hadoop -e 'SHOW DATABASES;'
+docker exec hadoop-hive beeline -u 'jdbc:hive2://localhost:10000' -n hadoop -e 'SHOW DATABASES;'
 
 # Kyuubi
 docker exec hadoop-kyuubi beeline -u 'jdbc:hive2://localhost:10009' -n hadoop -e 'SHOW DATABASES;'

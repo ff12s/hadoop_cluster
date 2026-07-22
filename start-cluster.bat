@@ -21,7 +21,7 @@ if errorlevel 1 (
 )
 
 set "NAMENODE_CONTAINER=hadoop-node"
-set "HIVESERVER2_CONTAINER=hadoop-hiveserver2"
+set "HIVESERVER2_CONTAINER=hadoop-hive"
 
 if not exist ".\scripts\image-tags.ps1" (
     echo ERROR: scripts\image-tags.ps1 not found. Aborting.
@@ -120,7 +120,7 @@ goto :try_pull_then_build
 rem ===========================================================================
 rem Путь B (--build): три этапа сборки по графу зависимостей:
 rem   этап 2: base
-rem   этап 3: spark-image, hive-metastore  (оба FROM base)
+rem   этап 3: spark-image, hive  (оба FROM base)
 rem   этап 4: jupyter, kyuubi, airflow     (оба FROM spark, airflow копирует из них)
 rem --pull не используем: локальные FROM-образы стенда не лежат в registry.
 rem ===========================================================================
@@ -129,7 +129,7 @@ call :run_stage "[2/!TOTAL!] Building base" "%DC% build base"
 if errorlevel 1 exit /b 1
 rem --parallel не передаём: docker compose v2 собирает независимые сервисы
 rem параллельно сам и такого флага не принимает.
-call :run_stage "[3/!TOTAL!] Building spark-image, hive-metastore" "%DC% build spark-image hive-metastore"
+call :run_stage "[3/!TOTAL!] Building spark-image, hive" "%DC% build spark-image hive"
 if errorlevel 1 exit /b 1
 call :run_stage "[4/!TOTAL!] Building jupyter, kyuubi, airflow" "%DC% build jupyter kyuubi airflow-image"
 if errorlevel 1 exit /b 1
@@ -144,7 +144,7 @@ echo.
 echo [2/!TOTAL!] Pulling images from Docker Hub
 call :pull_or_mark base "%BASE_REMOTE%" "%BASE_IMAGE%" 1
 call :pull_or_mark spark-image "%SPARK_REMOTE%" "%SPARK_IMAGE%" 2
-call :pull_or_mark hive-metastore "%HIVE_REMOTE%" "%HIVE_IMAGE%" 2
+call :pull_or_mark hive "%HIVE_REMOTE%" "%HIVE_IMAGE%" 2
 call :pull_or_mark jupyter "%JUPYTER_REMOTE%" "%JUPYTER_IMAGE%" 3
 call :pull_or_mark kyuubi "%KYUUBI_REMOTE%" "%KYUUBI_IMAGE%" 3
 call :pull_or_mark airflow-image "%AIRFLOW_REMOTE%" "%AIRFLOW_IMAGE%" 3

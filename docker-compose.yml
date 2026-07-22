@@ -162,42 +162,34 @@ services:
           - spark-history
     command: ["/opt/scripts/start-hadoop.sh"]
 
-  hive-metastore:
+  hive:
     build:
       context: ./hive
       dockerfile: Dockerfile
       args:
         <<: *versions
     image: ${HIVE_IMAGE:-hadoop-cluster-hive:latest}
-    container_name: hadoop-hive-metastore
-    hostname: hive-metastore
+    container_name: hadoop-hive
+    hostname: hadoop-hive
     ports:
-      - "9083:9083"  # Hive Metastore
-    volumes:
-      - hive-warehouse:/opt/hive/warehouse
-      - hive-logs:/opt/hive/logs
-    environment:
-      <<: *versions
-    depends_on:
-      - postgres
-      - hadoop
-    command: ["/opt/scripts/start-metastore.sh"]
-
-  hiveserver2:
-    image: ${HIVE_IMAGE:-hadoop-cluster-hive:latest}
-    container_name: hadoop-hiveserver2
-    hostname: hiveserver2
-    ports:
+      - "9083:9083"    # Hive Metastore Thrift
       - "10000:10000"  # HiveServer2 Thrift
     volumes:
       - hive-warehouse:/opt/hive/warehouse
       - hive-logs:/opt/hive/logs
     environment:
       <<: *versions
+    networks:
+      default:
+        aliases:
+          - hive-metastore
+          - hiveserver2
     depends_on:
-      - hive-metastore
-      - hadoop
-    command: ["/opt/scripts/start-hiveserver2.sh"]
+      postgres:
+        condition: service_healthy
+      hadoop:
+        condition: service_started
+    command: ["/opt/scripts/start-hive.sh"]
 
   tez-ui:
     image: ${HIVE_IMAGE:-hadoop-cluster-hive:latest}
