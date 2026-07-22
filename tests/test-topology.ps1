@@ -77,6 +77,16 @@ Assert-True ($hivePorts -contains '9083') "порт 9083 опубликован 
 Assert-True ($hivePorts -contains '10000') "порт 10000 опубликован на hive"
 
 Write-Output ""
+Write-Output "== Task 4: TEZ UI served by nginx =="
+Assert-True (-not ($services -contains 'tez-ui')) "сервис tez-ui удалён из модели"
+Assert-True (@($cfg.volumes.PSObject.Properties.Name) -contains 'tez-ui-static') "том tez-ui-static объявлен"
+Assert-True (@($cfg.services.webproxy.networks.default.aliases) -contains 'tez-ui') "webproxy отвечает на DNS-имя tez-ui"
+$proxyMounts = @($cfg.services.webproxy.volumes | ForEach-Object { "$($_.source):$($_.target)" })
+Assert-True (($proxyMounts -join ' ') -match 'tez-ui-static:/usr/share/nginx/tez-ui') "webproxy монтирует tez-ui-static"
+$hiveMounts = @($cfg.services.hive.volumes | ForEach-Object { "$($_.source):$($_.target)" })
+Assert-True (($hiveMounts -join ' ') -match 'tez-ui-static:/srv/tez-ui') "hive монтирует tez-ui-static на запись"
+
+Write-Output ""
 if ($script:Failed -gt 0) {
     Write-Output "FAILED: $script:Failed assertion(s)"
     exit 1

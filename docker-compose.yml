@@ -177,6 +177,7 @@ services:
     volumes:
       - hive-warehouse:/opt/hive/warehouse
       - hive-logs:/opt/hive/logs
+      - tez-ui-static:/srv/tez-ui
     environment:
       <<: *versions
     networks:
@@ -190,16 +191,6 @@ services:
       hadoop:
         condition: service_started
     command: ["/opt/scripts/start-hive.sh"]
-
-  tez-ui:
-    image: ${HIVE_IMAGE:-hadoop-cluster-hive:latest}
-    container_name: hadoop-tez-ui
-    hostname: tez-ui
-    environment:
-      <<: *versions
-    depends_on:
-      - hadoop
-    command: ["/opt/scripts/start-tez-ui.sh"]
 
   jupyter:
     build:
@@ -321,6 +312,11 @@ services:
       - "18080:18080"  # Spark History Server
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - tez-ui-static:/usr/share/nginx/tez-ui:ro
+    networks:
+      default:
+        aliases:
+          - tez-ui
     depends_on:
       - hadoop
 
@@ -332,6 +328,7 @@ volumes:
   datanode-data:
   hive-warehouse:
   hive-logs:
+  tez-ui-static:
 
 networks:
   default:

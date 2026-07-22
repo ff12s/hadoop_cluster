@@ -50,6 +50,34 @@ if ! nc -z localhost 9083; then
   exit 1
 fi
 
+# --- Статика TEZ UI ---------------------------------------------------------
+# WAR распакован в образ при сборке; отдаёт его nginx, поэтому кладём содержимое
+# в общий том и пишем туда же конфиг с адресами Timeline Server и ResourceManager.
+
+TEZ_UI_SRC=/opt/tez-ui
+TEZ_UI_DST=/srv/tez-ui
+
+if [ -d "$TEZ_UI_SRC" ] && [ -n "$(ls -A "$TEZ_UI_SRC" 2>/dev/null)" ]; then
+    echo "Publishing TEZ UI static files to $TEZ_UI_DST..."
+    mkdir -p "$TEZ_UI_DST"
+    cp -a "$TEZ_UI_SRC/." "$TEZ_UI_DST/"
+    mkdir -p "$TEZ_UI_DST/config"
+    cat > "$TEZ_UI_DST/config/configs.env" << 'ENVEOF'
+# TEZ UI configuration
+# URLs go through nginx webproxy, so localhost works without hosts file
+ENV = {
+  defined: {
+    defined: true,
+    timelineBaseUrl: "http://localhost:8188",
+    RMWebUrl: "http://localhost:8088"
+  }
+};
+ENVEOF
+    echo "TEZ UI published"
+else
+    echo "WARNING: $TEZ_UI_SRC is empty or missing, TEZ UI will not be served"
+fi
+
 # --- HiveServer2 ------------------------------------------------------------
 
 echo "Waiting for HDFS to be ready..."

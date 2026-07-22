@@ -85,6 +85,11 @@ COPY scripts/ /opt/scripts/
 RUN find /opt/scripts -name "*.sh" -type f -exec dos2unix {} \; && \
     chmod +x /opt/scripts/* && chown -R hadoop:hadoop /opt/scripts
 
+# Точка монтирования тома tez-ui-static: создаём и передаём во владение hadoop
+# заранее, иначе Docker создаёт свежий именованный том с владельцем root, и
+# процесс hive (USER hadoop, непривилегированный) не сможет в него писать.
+RUN mkdir -p /srv/tez-ui && chown hadoop:hadoop /srv/tez-ui
+
 USER hadoop
 WORKDIR /home/hadoop
 

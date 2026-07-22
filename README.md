@@ -104,7 +104,7 @@ hadoop_cluster/
 │   └── Dockerfile
 ├── hive/                    # Hive + Tez (Metastore + HiveServer2 + Tez UI)
 │   ├── config/              # hive-site.xml, tez-site.xml
-│   ├── scripts/             # start-hive, start-tez-ui
+│   ├── scripts/             # start-hive
 │   ├── .dockerignore
 │   └── Dockerfile
 ├── spark/                   # Spark с History Server
@@ -334,8 +334,11 @@ docker compose logs -f
 # Логи конкретного сервиса
 docker compose logs -f hadoop
 docker compose logs -f hive
-docker compose logs -f tez-ui
+docker compose logs -f webproxy
 ```
+
+Статику TEZ UI публикует контейнер `hadoop-hive` в том `tez-ui-static`, а отдаёт
+её nginx (`webproxy`) на порту 9999 — отдельного сервиса `tez-ui` больше нет.
 
 ## Мониторинг
 
