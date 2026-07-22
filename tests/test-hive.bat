@@ -60,11 +60,7 @@ docker exec hadoop-hive beeline -u jdbc:hive2://hiveserver2:10000 -n hadoop -e "
 
 echo.
 echo 7. Checking Hive logs...
-echo Hive Metastore logs:
-docker-compose logs --tail=5 hive
-
-echo.
-echo HiveServer2 logs:
+echo Metastore and HiveServer2 logs (единый контейнер hadoop-hive):
 docker-compose logs --tail=5 hive
 
 echo.

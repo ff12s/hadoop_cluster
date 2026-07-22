@@ -61,7 +61,7 @@ docker exec hadoop-node bash -lc "hdfs dfs -mkdir -p /user/hive/warehouse && hdf
 
 echo.
 echo 4) Submitting Spark job on YARN (cluster mode)...
-docker exec %CONTAINER% bash -lc "spark-submit --name %JOB_NAME% --class %CLASS_NAME% --files %REMOTE_DIR%/args.json --conf spark.sql.catalogImplementation=hive --conf spark.sql.warehouse.dir=hdfs://namenode:9000/user/hive/warehouse --master yarn --deploy-mode cluster %REMOTE_DIR%/%JAR_FILE% args.json" || (
+docker exec -u hadoop %CONTAINER% bash -lc "spark-submit --name %JOB_NAME% --class %CLASS_NAME% --files %REMOTE_DIR%/args.json --conf spark.sql.catalogImplementation=hive --conf spark.sql.warehouse.dir=hdfs://namenode:9000/user/hive/warehouse --master yarn --deploy-mode cluster %REMOTE_DIR%/%JAR_FILE% args.json" || (
   echo [ERROR] spark-submit failed
   exit /b 1
 )
