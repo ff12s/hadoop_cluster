@@ -125,7 +125,7 @@ hadoop_cluster/
 ├── airflow/                 # Airflow (webserver + scheduler)
 │   ├── dags/                # spark_pi_dag, spark_etl_dag
 │   ├── jobs/                # PySpark-джобы для DAG'ов
-│   ├── scripts/             # init-airflow.sh, ensure_db.py
+│   ├── scripts/             # start-airflow.sh, ensure_db.py
 │   ├── logs/                # Логи задач (монтируются, не коммитятся)
 │   ├── .dockerignore
 │   └── Dockerfile
@@ -213,13 +213,14 @@ copy env_example .env
 - `spark_etl_dag` — генерация и агрегация parquet в HDFS; лайнидж уезжает в Marquez. Джобы регистрируются
   в job-неймспейсе `hadoop-cluster`, а сами датасеты (raw.parquet, agg.parquet) — в неймспейсе URI
   хранилища `hdfs://namenode:9000` (это неймспейс, в котором их искать через `GET /api/v1/namespaces/...`).
-- Метаданные Airflow живут в общем контейнере `hadoop-postgres` (база `airflow`), её создаёт сервис `airflow-init`,
-  дождавшись healthcheck'а Postgres. Имя роли, пароль и базу можно переопределить в `.env`
+- Метаданные Airflow живут в общем контейнере `hadoop-postgres` (база `airflow`), её создаёт сервис `airflow`
+  (контейнер `hadoop-airflow`) при каждом старте, дождавшись healthcheck'а Postgres — инициализация выполняется
+  перед запуском scheduler и webserver в этом же контейнере. Имя роли, пароль и базу можно переопределить в `.env`
   (`AIRFLOW_DB_USER`, `AIRFLOW_DB_PASSWORD`, `AIRFLOW_DB_NAME`; все они перечислены закомментированными
   в `env_example`) — из них же собирается строка подключения Airflow.
   Пароль подставляется в URI `postgresql+psycopg2://user:pass@host:port/db` как есть, поэтому символы `@ : / # ?`
   в нём использовать нельзя. Смена `AIRFLOW_DB_PASSWORD` на уже инициализированном стенде подхватывается:
-  `airflow-init` при каждом запуске приводит пароль роли к текущему значению.
+  инициализация при каждом запуске приводит пароль роли к текущему значению.
 - Учётка UI задаётся `AIRFLOW_ADMIN_USER` / `AIRFLOW_ADMIN_PASSWORD` и создаётся **один раз**, при первичной
   инициализации; позже пароль меняется только через UI или `airflow users delete` + пересоздание.
 - Шифрование секретов в базе метаданных по умолчанию выключено (`AIRFLOW__CORE__FERNET_KEY` пуст) — пароли

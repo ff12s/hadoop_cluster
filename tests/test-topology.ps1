@@ -88,6 +88,15 @@ Assert-True (($hiveMounts -join ' ') -match 'tez-ui-static:/srv/tez-ui') "hive �
 Assert-True ($cfg.services.webproxy.depends_on.hive.condition -eq 'service_started') "webproxy ждёт запуска hive (proxy_pass на hiveserver2 без resolver резолвит имя один раз при старте nginx)"
 
 Write-Output ""
+Write-Output "== Task 5: merge of the three Airflow containers =="
+Assert-True (-not ($services -contains 'airflow-init')) "сервис airflow-init удалён из модели"
+Assert-True (-not ($services -contains 'airflow-webserver')) "сервис airflow-webserver удалён из модели"
+Assert-True (-not ($services -contains 'airflow-scheduler')) "сервис airflow-scheduler удалён из модели"
+Assert-True ($services -contains 'airflow') "сервис airflow присутствует"
+Assert-True ($cfg.services.airflow.container_name -eq 'hadoop-airflow') "container_name сервиса airflow = hadoop-airflow"
+Assert-True ((Get-PublishedPorts $cfg.services.airflow) -contains '8080') "порт 8080 опубликован на airflow"
+
+Write-Output ""
 if ($script:Failed -gt 0) {
     Write-Output "FAILED: $script:Failed assertion(s)"
     exit 1

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Одноразовая инициализация Airflow: база метаданных, схема, учётка администратора.
+# Единый контейнер Airflow: инициализация метаданных, затем scheduler и webserver.
 set -euo pipefail
 
 echo "[init] создаём роль и базу метаданных"
@@ -20,4 +20,12 @@ printf '%s\n%s\n' "${admin_password}" "${admin_password}" | airflow users create
     --role Admin \
     --email admin@example.com
 
-echo "[init] готово"
+echo "[init] готово, запускаем процессы"
+
+# Схема накатывается до запуска компонентов — документация требует, чтобы во время
+# миграции Airflow не работал.
+echo "[run] scheduler в фоне"
+airflow scheduler &
+
+echo "[run] webserver на переднем плане"
+exec airflow webserver
