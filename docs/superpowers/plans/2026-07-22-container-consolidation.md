@@ -319,7 +319,7 @@ $services = @($cfg.services.PSObject.Properties.Name)
 - [ ] **Step 2: Прогнать тест и убедиться, что новые проверки падают**
 
 Run: `tests\test-topology.bat`
-Expected: секция Task 1 — семь `OK`; секция Task 2 — девять `FAIL` (проверка `$services -contains 'hadoop'` падает, обращения к `$cfg.services.hadoop.*` дают `$null`), код возврата 1.
+Expected: секция Task 1 — семь `OK`; секция Task 2 — двенадцать `FAIL` (проверка `$services -contains 'hadoop'` падает, обращения к `$cfg.services.hadoop.*` дают `$null`), код возврата 1.
 
 - [ ] **Step 3: Написать объединённый скрипт запуска**
 
@@ -395,9 +395,8 @@ tail -f /dev/null
     user: "0:0"
     volumes:
       - namenode-data:/opt/hadoop/dfs/name
-      - namenode-logs:/opt/hadoop/logs
+      - hadoop-logs:/opt/hadoop/logs
       - datanode-data:/opt/hadoop/dfs/data
-      - datanode-logs:/opt/hadoop/dfs/data-logs
       - timeline-data:/opt/hadoop/timeline-data
       - ./hive/config/hive-site.xml:/opt/hadoop/etc/hadoop/hive-site.xml:ro
       - ./hive/config/tez-site.xml:/opt/hadoop/etc/hadoop/tez-site.xml:ro
@@ -416,7 +415,16 @@ tail -f /dev/null
     command: ["/opt/scripts/start-hadoop.sh"]
 ```
 
-`namenode-logs` и `datanode-logs` раньше монтировались оба в `/opt/hadoop/logs` в **разных** контейнерах; в одном контейнере такой маунт невозможен. `datanode-logs` перевешивается на `/opt/hadoop/dfs/data-logs`, чтобы том не потерялся и не конфликтовал; файловые логи всех демонов теперь пишутся в `namenode-logs`.
+`namenode-logs` и `datanode-logs` раньше монтировались оба в `/opt/hadoop/logs` в **разных** контейнерах; в одном контейнере два тома на один путь невозможны. Оба заменяются одним томом `hadoop-logs`, в который пишут файловые логи всех шести демонов. В блоке `volumes:` строки `namenode-logs:` и `datanode-logs:` заменить на `hadoop-logs:`. Содержимое старых томов не переносится: переход всё равно требует `--clean`, стирающего все тома.
+
+Добавить в `tests/test-topology.ps1` в секцию Task 2 ещё три проверки:
+
+```powershell
+$declaredVolumes = @($cfg.volumes.PSObject.Properties.Name)
+Assert-True (-not ($declaredVolumes -contains 'namenode-logs')) "том namenode-logs заменён"
+Assert-True (-not ($declaredVolumes -contains 'datanode-logs')) "том datanode-logs заменён"
+Assert-True ($declaredVolumes -contains 'hadoop-logs') "объявлен единый том hadoop-logs"
+```
 
 Во всех остальных сервисах (`hive-metastore`, `hiveserver2`, `tez-ui`, `jupyter`, `kyuubi`, `webproxy`) заменить в `depends_on` имена `namenode`, `datanode`, `spark-history` на единственное `hadoop`, убрав получившиеся дубликаты.
 
