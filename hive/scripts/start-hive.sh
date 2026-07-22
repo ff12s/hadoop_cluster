@@ -19,9 +19,17 @@ echo "Initializing/Upgrading Hive Metastore schema..."
 if schematool -dbType postgres -info >/dev/null 2>&1; then
   echo "Metastore schema exists. Upgrading if needed..."
   schematool -dbType postgres -upgradeSchema
+  schema_rc=$?
 else
   echo "Metastore schema not found. Initializing..."
   schematool -dbType postgres -initSchema
+  schema_rc=$?
+fi
+# Без "-e" ненулевой код schematool сам по себе не роняет скрипт — проверяем явно,
+# иначе метастор поднимется поверх не применённой/битой схемы и откажет позже неявно.
+if [ "$schema_rc" -ne 0 ]; then
+  echo "ERROR: schematool exited with code $schema_rc, metastore schema is not in a known-good state" >&2
+  exit 1
 fi
 
 echo "Starting Hive Metastore..."
