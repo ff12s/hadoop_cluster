@@ -81,8 +81,8 @@ docker compose down
         └─────────┘   └───────┘  └───────────┘
 
    ┌──────────┐  ┌──────────┐  ┌───────────────┐
-   │JupyterLab│  │ Marquez  │  │  Marquez DB   │
-   │  :8888   │  │:3000/:5k │  │  (PostgreSQL) │
+   │JupyterLab│  │ Marquez  │  │  PostgreSQL   │
+   │  :8888   │  │:3000/:5k │  │(на весь стенд)│
    └──────────┘  └──────────┘  └───────────────┘
 ```
 
@@ -374,8 +374,8 @@ docker exec hadoop-kyuubi beeline -u 'jdbc:hive2://localhost:10009' -n hadoop -e
 |------|--------|
 | 3000 | Marquez Web |
 | 5000 | Marquez API |
-| 5433 | Marquez PostgreSQL |
-| 5434 | Hive Metastore PostgreSQL |
+| 5433 | Общий PostgreSQL (совместимость с прежним marquez-db) |
+| 5434 | Общий PostgreSQL (hive_metastore, airflow, marquez) |
 | 8042 | YARN NodeManager UI |
 | 8080 | Airflow Web UI |
 | 8088 | YARN ResourceManager UI |

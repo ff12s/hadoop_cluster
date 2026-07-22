@@ -75,31 +75,12 @@ services:
         <<: *versions
     image: ${AIRFLOW_IMAGE:-hadoop-cluster-airflow:latest}
     profiles: ["build"]
-  marquez-db:
-    image: postgres:13
-    container_name: hadoop-marquez-db
-    hostname: marquez-db
-    environment:
-      <<: *versions
-      POSTGRES_USER: marquez
-      POSTGRES_PASSWORD: marquez
-      POSTGRES_DB: marquez
-    volumes:
-      - marquez-data:/var/lib/postgresql/data
-    ports:
-      - "5433:5432"  # Expose Marquez Postgres on host port 5433
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U marquez"]
-      interval: 5s
-      timeout: 5s
-      retries: 20
-
   marquez:
     image: marquezproject/marquez:${MARQUEZ_VERSION:-0.47.0}
     container_name: hadoop-marquez
     hostname: marquez
     depends_on:
-      marquez-db:
+      postgres:
         condition: service_healthy
     environment:
       <<: *versions
@@ -140,8 +121,14 @@ services:
       POSTGRES_PASSWORD: hive
     volumes:
       - postgres-data:/var/lib/postgresql/data
+      - ./postgres/initdb:/docker-entrypoint-initdb.d:ro
     ports:
-      - "5434:5432"  # Hive Metastore PostgreSQL (non-default port to avoid conflicts)
+      - "5433:5432"  # бывший порт marquez-db, сохранён для совместимости
+      - "5434:5432"  # Hive Metastore PostgreSQL
+    networks:
+      default:
+        aliases:
+          - marquez-db
     healthcheck:
       # -h 127.0.0.1 форсирует TCP: во время initdb сервер слушает только unix-сокет
       test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U hive -d hive_metastore"]
@@ -374,7 +361,6 @@ services:
 
 volumes:
   postgres-data:
-  marquez-data:
   namenode-data:
   namenode-logs:
   timeline-data:
