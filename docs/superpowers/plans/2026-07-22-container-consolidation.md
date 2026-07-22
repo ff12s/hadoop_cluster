@@ -1006,7 +1006,7 @@ Expected: пустой вывод.
 docker compose down -v --remove-orphans
 docker compose up -d airflow
 docker compose logs airflow | grep -i "роль airflow\|база airflow\|db init\|готово"
-docker exec hadoop-postgres psql -U hive -c "\l" | grep airflow
+docker exec hadoop-postgres psql -U hive -d hive_metastore -c "\l" | grep airflow
 docker exec hadoop-airflow airflow jobs check --job-type SchedulerJob --hostname hadoop-airflow
 curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8080/health
 docker compose down --remove-orphans
@@ -1335,7 +1335,7 @@ Expected: ровно семь контейнеров — `hadoop-node`, `hadoop-
 - [ ] **Step 3: Проверить три базы в одном PostgreSQL**
 
 ```bash
-docker exec hadoop-postgres psql -U hive -c "\l"
+docker exec hadoop-postgres psql -U hive -d hive_metastore -c "\l"
 ```
 
 Expected: в списке присутствуют `hive_metastore`, `airflow`, `marquez`.
