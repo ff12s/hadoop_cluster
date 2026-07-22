@@ -318,7 +318,10 @@ services:
         aliases:
           - tez-ui
     depends_on:
-      - hadoop
+      hadoop:
+        condition: service_started
+      hive:
+        condition: service_started
 
 volumes:
   postgres-data:

@@ -59,10 +59,16 @@ TEZ_UI_DST=/srv/tez-ui
 
 if [ -d "$TEZ_UI_SRC" ] && [ -n "$(ls -A "$TEZ_UI_SRC" 2>/dev/null)" ]; then
     echo "Publishing TEZ UI static files to $TEZ_UI_DST..."
-    mkdir -p "$TEZ_UI_DST"
-    cp -a "$TEZ_UI_SRC/." "$TEZ_UI_DST/"
-    mkdir -p "$TEZ_UI_DST/config"
-    cat > "$TEZ_UI_DST/config/configs.env" << 'ENVEOF'
+    publish_rc=0
+    mkdir -p "$TEZ_UI_DST" || publish_rc=$?
+    if [ "$publish_rc" -eq 0 ]; then
+        cp -a "$TEZ_UI_SRC/." "$TEZ_UI_DST/" || publish_rc=$?
+    fi
+    if [ "$publish_rc" -eq 0 ]; then
+        mkdir -p "$TEZ_UI_DST/config" || publish_rc=$?
+    fi
+    if [ "$publish_rc" -eq 0 ]; then
+        cat > "$TEZ_UI_DST/config/configs.env" << 'ENVEOF'
 # TEZ UI configuration
 # URLs go through nginx webproxy, so localhost works without hosts file
 ENV = {
@@ -73,6 +79,15 @@ ENV = {
   }
 };
 ENVEOF
+        publish_rc=$?
+    fi
+    # Без "-e" сбой mkdir/cp/записи configs.env сам по себе не роняет скрипт —
+    # проверяем publish_rc явно, иначе "TEZ UI published" напечатается при
+    # реально неудачной публикации (read-only том, нет места, битый /opt/tez-ui).
+    if [ "$publish_rc" -ne 0 ]; then
+        echo "ERROR: failed to publish TEZ UI static files to $TEZ_UI_DST (rc=$publish_rc)" >&2
+        exit 1
+    fi
     echo "TEZ UI published"
 else
     echo "WARNING: $TEZ_UI_SRC is empty or missing, TEZ UI will not be served"

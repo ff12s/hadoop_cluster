@@ -85,6 +85,7 @@ $proxyMounts = @($cfg.services.webproxy.volumes | ForEach-Object { "$($_.source)
 Assert-True (($proxyMounts -join ' ') -match 'tez-ui-static:/usr/share/nginx/tez-ui') "webproxy монтирует tez-ui-static"
 $hiveMounts = @($cfg.services.hive.volumes | ForEach-Object { "$($_.source):$($_.target)" })
 Assert-True (($hiveMounts -join ' ') -match 'tez-ui-static:/srv/tez-ui') "hive монтирует tez-ui-static на запись"
+Assert-True ($cfg.services.webproxy.depends_on.hive.condition -eq 'service_started') "webproxy ждёт запуска hive (proxy_pass на hiveserver2 без resolver резолвит имя один раз при старте nginx)"
 
 Write-Output ""
 if ($script:Failed -gt 0) {
