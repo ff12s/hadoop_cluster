@@ -97,6 +97,22 @@ Assert-True ($cfg.services.airflow.container_name -eq 'hadoop-airflow') "contain
 Assert-True ((Get-PublishedPorts $cfg.services.airflow) -contains '8080') "порт 8080 опубликован на airflow"
 
 Write-Output ""
+Write-Output "== Task 6: kyuubi and jupyter behind profiles =="
+$defaultCfg = Get-ComposeModel
+$defaultServices = @($defaultCfg.services.PSObject.Properties.Name)
+$expectedDefault = @('hadoop','postgres','hive','airflow','marquez','marquez-web','webproxy')
+Assert-True (-not ($defaultServices -contains 'kyuubi')) "kyuubi не стартует по умолчанию"
+Assert-True (-not ($defaultServices -contains 'jupyter')) "jupyter не стартует по умолчанию"
+Assert-True ((@($defaultServices | Sort-Object) -join ',') -eq (@($expectedDefault | Sort-Object) -join ',')) "по умолчанию модель содержит ровно семь сервисов"
+
+$optCfg = Get-ComposeModel -Profiles @('kyuubi','jupyter')
+$optServices = @($optCfg.services.PSObject.Properties.Name)
+Assert-True ($optServices -contains 'kyuubi') "kyuubi появляется при включённом профиле kyuubi"
+Assert-True ($optServices -contains 'jupyter') "jupyter появляется при включённом профиле jupyter"
+Assert-True (@($optCfg.services.kyuubi.profiles) -contains 'kyuubi') "у сервиса kyuubi объявлен профиль kyuubi"
+Assert-True (@($optCfg.services.jupyter.profiles) -contains 'jupyter') "у сервиса jupyter объявлен профиль jupyter"
+
+Write-Output ""
 if ($script:Failed -gt 0) {
     Write-Output "FAILED: $script:Failed assertion(s)"
     exit 1

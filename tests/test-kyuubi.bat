@@ -3,6 +3,14 @@ echo ========================================
 echo Kyuubi Testing
 echo ========================================
 
+docker ps --format "{{.Names}}" | findstr /b /c:"hadoop-kyuubi" >nul
+if errorlevel 1 (
+    echo ERROR: container hadoop-kyuubi is not running.
+    echo Kyuubi lives behind an opt-in compose profile.
+    echo Start the stand with:  start-cluster.bat --with-kyuubi
+    exit /b 1
+)
+
 echo.
 echo 1. Checking container status...
 docker-compose ps

@@ -8,8 +8,8 @@
 - **Hive 3.1.3** — Data Warehouse с PostgreSQL 13 и движком **Apache Tez**
 - **Apache Tez 0.10.2** — DAG-движок для Hive (замена MapReduce), с Tez UI
 - **Spark 3.5.2** — Обработка данных и машинное обучение
-- **JupyterLab** — Интерактивная разработка с PySpark и Scala
-- **Kyuubi 1.10.2** — Spark SQL через JDBC/Thrift
+- **JupyterLab** — Интерактивная разработка с PySpark и Scala (опционально, профиль `jupyter`)
+- **Kyuubi 1.10.2** — Spark SQL через JDBC/Thrift (опционально, профиль `kyuubi`)
 - **Airflow 2.6.3** — Оркестрация Spark-джоб на YARN
 - **OpenLineage** — Трассировка данных (Marquez)
 - **Nginx** — Реверс-прокси для всех веб-интерфейсов
@@ -38,6 +38,25 @@ docker compose stop
 docker compose down
 ```
 
+### Опциональные сервисы: Kyuubi и Jupyter
+
+По умолчанию поднимаются только семь основных сервисов (`hadoop`, `postgres`, `hive`,
+`airflow`, `marquez`, `marquez-web`, `webproxy`) — `kyuubi` и `jupyter` тяжёлые и не
+нужны для базового сценария, поэтому вынесены в опциональные compose-профили `kyuubi`
+и `jupyter` и по умолчанию не стартуют.
+
+```bash
+# Поднять стенд вместе с kyuubi и/или jupyter
+docker compose --profile kyuubi --profile jupyter up -d
+
+# То же самое через переменную окружения
+COMPOSE_PROFILES=kyuubi,jupyter docker compose up -d
+```
+
+> ⚠️ `docker compose down` **не останавливает** контейнеры выключенных профилей —
+> это документированное поведение Docker Compose. Если стенд был поднят с профилями,
+> гасите его с теми же профилями: `COMPOSE_PROFILES=kyuubi,jupyter docker compose down`.
+
 ## Веб-интерфейсы
 
 Все веб-интерфейсы доступны через Nginx реверс-прокси — внутренние hostname контейнеров автоматически заменяются на `localhost`.
@@ -54,7 +73,7 @@ docker compose down
 | Tez UI | http://localhost:9999 | Мониторинг DAG-задач Tez |
 | Spark History Server | http://localhost:18080 | История Spark-приложений |
 | HiveServer2 Web UI | http://localhost:10002 | Веб-интерфейс Hive |
-| JupyterLab | http://localhost:8888 | Интерактивная разработка |
+| JupyterLab | http://localhost:8888 | Интерактивная разработка (профиль `jupyter`, не поднимается по умолчанию) |
 | Airflow | http://localhost:8080 | Оркестрация DAG'ов (учётка по умолчанию `admin` / `admin`) |
 | Marquez Web | http://localhost:3000 | Трассировка данных |
 | Marquez API | http://localhost:5000 | API для трассировки |
@@ -187,6 +206,9 @@ copy env_example .env
 > Hive использует **Tez** в качестве движка выполнения запросов, что значительно быстрее MapReduce. DAG-задачи можно мониторить в [Tez UI](http://localhost:9999).
 
 ### Kyuubi через DBeaver / JDBC
+
+> Требует профиль compose `kyuubi` (см. "Опциональные сервисы" выше).
+
 - **Драйвер**: Apache Hive 3.1+
 - **Host**: `localhost`
 - **Port**: `10009`
@@ -198,6 +220,9 @@ copy env_example .env
 > Kyuubi использует **Spark SQL** в качестве движка, поддерживает все возможности Spark SQL.
 
 ### Spark через Jupyter
+
+> Требует профиль compose `jupyter` (см. "Опциональные сервисы" выше).
+
 - Откройте http://localhost:8888
 - Доступны ядра: Python (PySpark), Scala (Toree)
 - Автоматически подключён к YARN
@@ -273,7 +298,7 @@ tests\test-cluster.bat
 | YARN | `tests\test-yarn.bat` | ResourceManager, NodeManager, MapReduce |
 | Spark | `tests\test-spark.bat` | Spark Pi на YARN, PySpark, History Server |
 | Hive | `tests\test-hive.bat` | HiveServer2, создание таблиц, SQL-запросы, Metastore |
-| Kyuubi | `tests\test-kyuubi.bat` | Beeline, Spark SQL таблицы, приложения в YARN |
+| Kyuubi | `tests\test-kyuubi.bat` | Beeline, Spark SQL таблицы, приложения в YARN (нужен профиль `kyuubi`, см. "Опциональные сервисы") |
 | OpenLineage | `tests\test-openlineage.bat` | Marquez API, трассировка Spark, метаданные |
 | Airflow | `tests\test-airflow.bat` | Health контейнеров, импорт DAG'ов, прогон обоих DAG'ов, артефакты в HDFS и лайнидж |
 
@@ -316,14 +341,17 @@ docker compose build airflow-image
 ### Управление сервисами
 
 ```bash
-# Запуск всего кластера
+# Запуск основных семи сервисов (без kyuubi и jupyter)
 docker compose up -d
 
-# Остановка
+# Запуск вместе с опциональными сервисами
+docker compose --profile kyuubi --profile jupyter up -d
+
+# Остановка (см. предупреждение про профили в разделе "Быстрый старт")
 docker compose down
 
-# Перезапуск конкретного сервиса
-docker compose restart jupyter
+# Перезапуск конкретного сервиса (явное имя активирует его профиль, если он есть)
+docker compose restart hive
 ```
 
 ### Просмотр логов

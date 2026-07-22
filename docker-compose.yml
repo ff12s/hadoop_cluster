@@ -202,6 +202,7 @@ services:
     image: ${JUPYTER_IMAGE:-hadoop-cluster-jupyter:latest}
     container_name: hadoop-jupyter
     hostname: jupyter
+    profiles: ["jupyter"]
     ports:
       - "8888:8888"  # JupyterLab
     environment:
@@ -256,6 +257,7 @@ services:
     image: ${KYUUBI_IMAGE:-hadoop-cluster-kyuubi:latest}
     container_name: hadoop-kyuubi
     hostname: kyuubi
+    profiles: ["kyuubi"]
     depends_on:
       - hadoop
       - marquez
