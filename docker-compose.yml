@@ -11,6 +11,7 @@ x-versions: &versions
   OPENLINEAGE_VERSION: ${OPENLINEAGE_VERSION}
   OPENLINEAGE_NAMESPACE: ${OPENLINEAGE_NAMESPACE}
   OPENLINEAGE_URL: ${OPENLINEAGE_URL}
+  OPENLINEAGE_JAR: ${OPENLINEAGE_JAR}
   JAVA_VERSION: ${JAVA_VERSION}
 
 # Окружение, общее для всех сервисов Airflow. Креды суперпользователя Postgres и

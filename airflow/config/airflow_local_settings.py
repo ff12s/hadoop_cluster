@@ -39,3 +39,15 @@ def task_policy(task: "BaseOperator") -> None:
     # Провайдер apache-airflow-providers-apache-spark 4.1.1 хранит conf в приватном
     # _conf (публичного conf нет); execute() строит hook именно из self._conf.
     task._conf = {**ol, **(task._conf or {})}
+
+    # OL-листенер грузится на драйвере из jar. В airflow-образе его нет (удалён в
+    # Dockerfile), на прод-узлах — тоже: jar лежит в HDFS. Дотаскиваем его в джобу
+    # через spark.jars (deploy-mode=cluster → YARN локализует jar на драйвер), иначе
+    # extraListeners падает с ClassNotFoundException. Путь — из OPENLINEAGE_JAR;
+    # добавляем к уже заданным DAG'ом jar'ам, не затирая их.
+    jar = os.environ.get("OPENLINEAGE_JAR")
+    if jar:
+        existing = [j for j in (task._conf.get("spark.jars") or "").split(",") if j]
+        if jar not in existing:
+            existing.append(jar)
+        task._conf["spark.jars"] = ",".join(existing)

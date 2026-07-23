@@ -31,6 +31,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=sparkdist --chown=airflow:root /opt/spark /opt/spark
 COPY --from=hadoopdist --chown=airflow:root /opt/hadoop /opt/hadoop
 
+# OpenLineage-jar удаляем из образа намеренно: под YARN (spark.yarn.jars не задан)
+# spark-submit заливает клиентский $SPARK_HOME/jars как classpath драйвера, поэтому
+# запечённый jar скрыл бы прод-поведение — на проде jar лежит в HDFS, а не под
+# SPARK_HOME. Airflow-джобы тащат его из HDFS через spark.jars (см. cluster policy
+# airflow_local_settings.py и OPENLINEAGE_JAR). Так стенд честно повторяет прод.
+RUN rm -f /opt/spark/jars/openlineage-spark_*.jar
+
 # Джобы в образ не копируются: compose монтирует ./airflow/jobs в /opt/airflow/jobs
 # и каталог-маунт всё равно перекрыл бы встроенную копию.
 COPY --chown=airflow:root scripts/ /opt/airflow/scripts/

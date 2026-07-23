@@ -27,6 +27,9 @@ AIRFLOW_VERSION=2.6.3
 OPENLINEAGE_VERSION=1.46.0
 OPENLINEAGE_NAMESPACE=hadoop-cluster
 OPENLINEAGE_URL=http://marquez:5000
+# HDFS-путь openlineage-spark jar (прод-подобно: jar в HDFS, не под SPARK_HOME).
+# Имя обязано совпадать с OPENLINEAGE_VERSION + scala 2.13.
+OPENLINEAGE_JAR=hdfs://namenode:9000/opt/openlineage/openlineage-spark_2.13-1.46.0.jar
 MARQUEZ_VERSION=0.47.0
 
 # Настройки Java

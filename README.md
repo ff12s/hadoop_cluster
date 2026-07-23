@@ -218,12 +218,18 @@ copy env_example .env
 | `OPENLINEAGE_VERSION` | `1.46.0` | Версия OpenLineage |
 | `OPENLINEAGE_NAMESPACE` | `hadoop-cluster` | Пространство имён |
 | `OPENLINEAGE_URL` | `http://marquez:5000` | URL транспорта OpenLineage → Marquez |
+| `OPENLINEAGE_JAR` | `hdfs://namenode:9000/opt/openlineage/openlineage-spark_2.13-1.46.0.jar` | HDFS-путь openlineage-spark jar для Airflow-джоб (имя ↔ `OPENLINEAGE_VERSION`) |
 
 OL-листенер **не** включён глобально в общий `spark-defaults.conf` — иначе он навешивался бы и на
 интерактивный `spark-shell` и ломал его. Вместо этого OL инжектится **точечно, на стороне каждого
 рантайма**, который должен писать лайнидж:
 - **Airflow** — cluster policy `task_policy` в `airflow/config/airflow_local_settings.py` домешивает
-  OL-конфиг в `conf` каждого `SparkSubmitOperator` (без правок в DAG'ах);
+  OL-конфиг в `conf` каждого `SparkSubmitOperator` (без правок в DAG'ах). Джобы идут в
+  `deploy-mode=cluster`, `spark.yarn.jars` не задан → spark-submit заливает клиентский
+  `$SPARK_HOME/jars` как classpath драйвера. Поэтому openlineage-spark jar **удалён из
+  airflow-образа** (`airflow/Dockerfile`) и берётся **из HDFS** через `spark.jars=$OPENLINEAGE_JAR`
+  (та же policy) — прод-подобно: на проде jar лежит в HDFS, а не под SPARK_HOME. Jar заливается в
+  HDFS скриптом `scripts/seed-openlineage-jar.bat` (вызывается из `start-cluster.bat` автоматически);
 - **Jupyter** — `PYSPARK_SUBMIT_ARGS` в `jupyter/scripts/start-jupyter.sh` (только для Spark-сессий ноутбуков);
 - **Kyuubi** — `spark.*`-ключи в `kyuubi/config/kyuubi-defaults.conf` (пробрасываются в порождаемый engine).
 

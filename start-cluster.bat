@@ -240,6 +240,16 @@ rem ===========================================================================
 call :run_stage "[!TOTAL!/!TOTAL!] Health check: Marquez" "curl -sf --max-time 10 -o nul http://localhost:5000/api/v1/namespaces"
 if errorlevel 1 exit /b 1
 
+rem OpenLineage jar в HDFS: airflow-джобы (deploy-mode=cluster) тащат его оттуда
+rem через spark.jars, т.к. из airflow-образа jar удалён (прод-подобно). Идемпотентно.
+echo.
+echo [provision] Seeding OpenLineage jar into HDFS...
+call ".\scripts\seed-openlineage-jar.bat"
+if errorlevel 1 (
+    echo ERROR: OpenLineage jar seeding failed. See output above.
+    exit /b 1
+)
+
 echo.
 echo Cluster started successfully!
 echo.
