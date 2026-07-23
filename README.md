@@ -217,6 +217,18 @@ copy env_example .env
 |------------|----------|----------|
 | `OPENLINEAGE_VERSION` | `1.46.0` | Версия OpenLineage |
 | `OPENLINEAGE_NAMESPACE` | `hadoop-cluster` | Пространство имён |
+| `OPENLINEAGE_URL` | `http://marquez:5000` | URL транспорта OpenLineage → Marquez |
+
+OL-листенер **не** включён глобально в общий `spark-defaults.conf` — иначе он навешивался бы и на
+интерактивный `spark-shell` и ломал его. Вместо этого OL инжектится **точечно, на стороне каждого
+рантайма**, который должен писать лайнидж:
+- **Airflow** — cluster policy `task_policy` в `airflow/config/airflow_local_settings.py` домешивает
+  OL-конфиг в `conf` каждого `SparkSubmitOperator` (без правок в DAG'ах);
+- **Jupyter** — `PYSPARK_SUBMIT_ARGS` в `jupyter/scripts/start-jupyter.sh` (только для Spark-сессий ноутбуков);
+- **Kyuubi** — `spark.*`-ключи в `kyuubi/config/kyuubi-defaults.conf` (пробрасываются в порождаемый engine).
+
+Поэтому `spark-shell` и «голая» нода `hadoop`/history листенер не грузят. DAG'ам не следует
+переопределять `spark.extraListeners` в своём `conf`: ключ не аддитивен и собьёт OL.
 
 ## Подключения
 
@@ -336,7 +348,7 @@ tests\test-cluster.bat
 | Spark | `tests\test-spark.bat` | Spark Pi на YARN, PySpark, History Server |
 | Hive | `tests\test-hive.bat` | HiveServer2, создание таблиц, SQL-запросы, Metastore |
 | Kyuubi | `tests\test-kyuubi.bat` | Beeline, Spark SQL таблицы, приложения в YARN (нужен профиль `kyuubi`, см. "Опциональные сервисы") |
-| OpenLineage | `tests\test-openlineage.bat` | Marquez API, трассировка Spark, метаданные |
+| OpenLineage | `tests\test-openlineage.bat` | Marquez API/Web, guard отсутствия OL-листенера в общем `spark-defaults.conf`, чистый прямой submit |
 | Airflow | `tests\test-airflow.bat` | Health контейнеров, импорт DAG'ов, прогон обоих DAG'ов, артефакты в HDFS и лайнидж |
 
 ## Ручное управление

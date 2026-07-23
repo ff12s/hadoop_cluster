@@ -26,6 +26,7 @@ AIRFLOW_VERSION=2.6.3
 # OpenLineage / Marquez
 OPENLINEAGE_VERSION=1.46.0
 OPENLINEAGE_NAMESPACE=hadoop-cluster
+OPENLINEAGE_URL=http://marquez:5000
 MARQUEZ_VERSION=0.47.0
 
 # Настройки Java

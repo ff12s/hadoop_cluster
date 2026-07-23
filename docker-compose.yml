@@ -10,6 +10,7 @@ x-versions: &versions
   AIRFLOW_VERSION: ${AIRFLOW_VERSION}
   OPENLINEAGE_VERSION: ${OPENLINEAGE_VERSION}
   OPENLINEAGE_NAMESPACE: ${OPENLINEAGE_NAMESPACE}
+  OPENLINEAGE_URL: ${OPENLINEAGE_URL}
   JAVA_VERSION: ${JAVA_VERSION}
 
 # Окружение, общее для всех сервисов Airflow. Креды суперпользователя Postgres и
@@ -43,6 +44,7 @@ x-airflow-env: &airflow-env
 x-airflow-volumes: &airflow-volumes
   - ./airflow/dags:/opt/airflow/dags
   - ./airflow/jobs:/opt/airflow/jobs
+  - ./airflow/config/airflow_local_settings.py:/opt/airflow/config/airflow_local_settings.py:ro
   - ./spark/scripts/pyspark_pi.py:/opt/airflow/jobs/pyspark_pi.py:ro
   - ./airflow/logs:/opt/airflow/logs
   - ./hive/config/hive-site.xml:/opt/spark/conf/hive-site.xml:ro
