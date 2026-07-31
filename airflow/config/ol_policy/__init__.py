@@ -25,7 +25,7 @@ import json
 import os
 import threading
 from types import SimpleNamespace
-from typing import Tuple, Type
+from typing import Callable, Tuple, Type
 from urllib.error import HTTPError
 from urllib.parse import quote, urlparse
 from urllib.request import urlopen
@@ -34,6 +34,7 @@ from . import handlers
 from . import logger
 from . import utils
 from . import hadoop_conf
+from .logger import logger as _logger
 
 MACRO = "__openlineage_v1"
 LISTENER = "io.openlineage.spark.agent.OpenLineageSparkListener"
@@ -297,6 +298,43 @@ def _validate_cfg() -> dict[str, object] | None:
         )
         return None
     return cfg
+
+
+def _emit(value: str, dag_cur: str | None, merge: Callable[[object, object], str], key: str) -> str:
+    """Оформляет наше значение под тот канал, которым парс передал DAG-значение.
+
+    Единственное место, где решается разделитель: пустой результат макроса не
+    должен оставлять в conf висячую запятую.
+
+    :param value: наше значение из Variable, уже прошедшее ``_clean``.
+    :param dag_cur: канал, выбранный парсом: ``""`` — DAG молчал, строка —
+        безопасный литерал DAG-значения, ``None`` — текст DAG'а стоит слева.
+    :param merge: ``utils.merge_listeners`` либо ``_merge_jars_pair``.
+    :param key: имя ключа conf для лога.
+    :return: строка для подстановки на месте вызова макроса.
+    """
+    if dag_cur is None:
+        _logger.info("ol_policy: %s дописан к DAG-значению, дедуп невозможен: %s", key, value)
+        return f",{value}"
+    if not dag_cur:
+        _logger.info("ol_policy: %s подмешан: %s", key, value)
+        return value
+    merged = merge(dag_cur, value)
+    _logger.info("ol_policy: %s мердж: %s", key, merged)
+    return merged
+
+
+def _merge_jars_pair(dag_cur: object, our_jar: object) -> str:
+    """Мердж двух источников jar'ов — форма, которую ждёт ``_emit``.
+
+    Третий канал (``conf["spark.jars"]``) склеен с атрибутом ``jars`` ещё на
+    парсе, поэтому на рендере источников ровно два.
+
+    :param dag_cur: склеенные на парсе jar'ы DAG'а.
+    :param our_jar: URI openlineage-spark jar'а.
+    :return: список jar'ов через запятую, без дубликатов, с сохранением порядка.
+    """
+    return utils.merge_jars(dag_cur, None, our_jar if isinstance(our_jar, str) else "")
 
 
 def ol_macro(field: str, forced: bool | None = None) -> str:

@@ -1737,3 +1737,27 @@ def test_merge_listeners_does_not_split_jinja(templated: str) -> None:
     assert ol_policy.merge_listeners("", templated) == templated
 
 
+def test_emit_without_dag_value_returns_value_as_is() -> None:
+    """Канал '': DAG молчал — возвращаем значение без разделителя."""
+    assert ol_policy._emit("io.ol.L", "", ol_policy.merge_listeners, "spark.extraListeners") == "io.ol.L"
+
+
+def test_emit_with_literal_merges_and_dedups() -> None:
+    """Канал-литерал: полный мердж с дедупом, DAG-значения первыми."""
+    merged = ol_policy._emit("io.ol.L", "com.example.A,io.ol.L", ol_policy.merge_listeners, "spark.extraListeners")
+
+    assert merged == "com.example.A,io.ol.L"
+
+
+def test_emit_with_none_channel_prefixes_comma() -> None:
+    """Канал None: слева уже стоит текст DAG'а — дописываем через запятую."""
+    assert ol_policy._emit("io.ol.L", None, ol_policy.merge_listeners, "spark.extraListeners") == ",io.ol.L"
+
+
+def test_emit_uses_the_merge_it_was_given() -> None:
+    """Ветка jar использует свой мердж — сплит и дедуп по тем же правилам."""
+    merged = ol_policy._emit("hdfs://n:9000/o.jar", "a.jar", ol_policy._merge_jars_pair, "spark.jars")
+
+    assert merged == "a.jar,hdfs://n:9000/o.jar"
+
+
