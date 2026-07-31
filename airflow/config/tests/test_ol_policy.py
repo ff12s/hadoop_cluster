@@ -1752,6 +1752,70 @@ def test_callback_refusal_on_missing_jar(
     assert getattr(task, layout.jars) is None
 
 
+@pytest.mark.parametrize("bad_url", ['""', '"   "', "5000", '"marquez:5000"', "null"])
+def test_callback_rejects_bad_url(
+    layout: SimpleNamespace,
+    spark_operator: type,
+    variable: Callable[..., SimpleNamespace],
+    caplog: pytest.LogCaptureFixture,
+    bad_url: str,
+) -> None:
+    """Негодный ``url`` в spark_conf выключает лайнидж целиком: таска остаётся нетронутой.
+
+    Регрессия для параметризованного покрытия ``variable._validate_cfg``'s URL-валидации,
+    ранее закрытого удалённым ``test_macro_rejects_bad_url`` (рендер-фаза до Task 5).
+    """
+    variable(
+        raw=(
+            '{"enabled": true, "spark_conf": '
+            '{"spark.extraListeners": "io.openlineage.spark.agent.OpenLineageSparkListener", '
+            f'"spark.openlineage.transport.url": {bad_url}, '
+            '"spark.openlineage.namespace": "stand"}, '
+            '"openlineage_jar": "hdfs:///jars/openlineage-spark.jar"}'
+        )
+    )
+    conf_before = {"spark.executor.cores": "2"}
+    task = layout.cls(dag=DummyDag(), conf=dict(conf_before), jars="a.jar")
+
+    _run_callback(task)
+
+    assert getattr(task, layout.conf) == conf_before
+    assert getattr(task, layout.jars) == "a.jar"
+    assert any("url" in message for message in warnings_of(caplog))
+
+
+@pytest.mark.parametrize("bad_namespace", ['""', '"   "', "5000", "null"])
+def test_callback_rejects_bad_namespace(
+    layout: SimpleNamespace,
+    spark_operator: type,
+    variable: Callable[..., SimpleNamespace],
+    caplog: pytest.LogCaptureFixture,
+    bad_namespace: str,
+) -> None:
+    """Негодный ``namespace`` в spark_conf выключает лайнидж целиком: таска остаётся нетронутой.
+
+    Регрессия для параметризованного покрытия ``variable._validate_cfg``'s namespace-валидации,
+    ранее закрытого удалённым ``test_macro_rejects_bad_namespace`` (рендер-фаза до Task 5).
+    """
+    variable(
+        raw=(
+            '{"enabled": true, "spark_conf": '
+            '{"spark.extraListeners": "io.openlineage.spark.agent.OpenLineageSparkListener", '
+            '"spark.openlineage.transport.url": "http://marquez:5000", '
+            f'"spark.openlineage.namespace": {bad_namespace}' + "}, "
+            '"openlineage_jar": "hdfs:///jars/openlineage-spark.jar"}'
+        )
+    )
+    conf_before = {"spark.executor.cores": "2"}
+    task = layout.cls(dag=DummyDag(), conf=dict(conf_before), jars="a.jar")
+
+    _run_callback(task)
+
+    assert getattr(task, layout.conf) == conf_before
+    assert getattr(task, layout.jars) == "a.jar"
+    assert any("namespace" in message for message in warnings_of(caplog))
+
+
 def test_callback_url_overrides_dag_value_with_log(
     layout: SimpleNamespace,
     spark_operator: type,
