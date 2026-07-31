@@ -3,8 +3,8 @@ setlocal EnableExtensions
 rem ===========================================================================
 rem Заливает openlineage-spark jar в HDFS. Прод-подобно: на проде jar лежит в
 rem HDFS, а не под SPARK_HOME. Airflow-джобы (deploy-mode=cluster) берут его оттуда
-rem через spark.jars (cluster policy airflow_local_settings.py + OPENLINEAGE_JAR),
-rem т.к. из airflow-образа jar удалён.
+rem через --jars (cluster policy в airflow/config/ol_policy, URI — из поля
+rem openlineage_jar Variable openlineage_config), т.к. из airflow-образа jar удалён.
 rem
 rem Источник — запечённый jar на hadoop-node (spark-образ). Идемпотентно (put -f).
 rem Вызывается автоматически из start-cluster.bat; можно запускать и вручную после

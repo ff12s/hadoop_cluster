@@ -464,13 +464,13 @@ def ol_macro(field: str, forced: bool | None = None, dag_cur: str | None = "") -
 
 
 def jar_path(jar_uri: str) -> str | None:
-    """Путь внутри HDFS из значения ``OPENLINEAGE_JAR``.
+    """Путь внутри HDFS из значения поля ``openlineage_jar`` Variable ``openlineage_config``.
 
     Схема обязательна: значение без схемы ``spark-submit`` трактует в ``--jars``
     как локальный файл сабмит-хоста, и джоба падает на локализации. Authority
     (RPC-хост и RPC-порт) игнорируется — эндпоинты WebHDFS даёт резолвер.
 
-    :param jar_uri: значение переменной окружения ``OPENLINEAGE_JAR``.
+    :param jar_uri: значение поля ``openlineage_jar`` из Variable ``openlineage_config``.
     :return: абсолютный путь для WebHDFS либо None, если значение негодно.
     """
     parsed = urlparse(jar_uri.strip())
@@ -574,7 +574,8 @@ def jar_available(jar_uri: str, path: str) -> bool:
     jar'ом с предсказуемым путём, не должен перегаживать кластер. Поток, доехавший
     после дедлайна, мемо не переписывает — поздняя запись потеряла бы актуальность.
 
-    :param jar_uri: исходное значение ``OPENLINEAGE_JAR`` — оно же ключ мемо.
+    :param jar_uri: исходное значение поля ``openlineage_jar`` Variable ``openlineage_config`` —
+        оно же ключ мемо.
     :param path: разобранный путь jar'а для WebHDFS.
     :return: True, если jar доступен; False во всех остальных исходах.
     """

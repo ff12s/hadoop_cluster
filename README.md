@@ -170,6 +170,7 @@ hadoop_cluster/
 ├── airflow/                 # Airflow (webserver + scheduler)
 │   ├── dags/                # spark_pi_dag, spark_etl_dag
 │   ├── jobs/                # PySpark-джобы для DAG'ов
+│   ├── config/              # cluster policy: airflow_local_settings.py (точка входа) + пакет ol_policy/, tests/
 │   ├── scripts/             # start-airflow.sh, ensure_db.py
 │   ├── logs/                # Логи задач (монтируются, не коммитятся)
 │   ├── .dockerignore
@@ -216,25 +217,128 @@ copy env_example .env
 | Переменная | Значение | Описание |
 |------------|----------|----------|
 | `OPENLINEAGE_VERSION` | `1.46.0` | Версия OpenLineage |
-| `OPENLINEAGE_NAMESPACE` | `hadoop-cluster` | Пространство имён |
-| `OPENLINEAGE_URL` | `http://marquez:5000` | URL транспорта OpenLineage → Marquez |
-| `OPENLINEAGE_JAR` | `hdfs://namenode:9000/opt/openlineage/openlineage-spark_2.13-1.46.0.jar` | HDFS-путь openlineage-spark jar для Airflow-джоб (имя ↔ `OPENLINEAGE_VERSION`) |
+| `OPENLINEAGE_CONFIG_RESEED` | `false` | `true` — при следующем старте контейнера перезаписать Variable `openlineage_config` дефолтным JSON (см. ниже). Сидинг иначе идемпотентный: существующую Variable не трогает, иначе правка через UI не пережила бы перезапуск |
+
+Переменных `OPENLINEAGE_NAMESPACE`, `OPENLINEAGE_URL` и `OPENLINEAGE_JAR` в `.env` больше нет: адрес
+Marquez, namespace, jar openlineage-spark и общий выключатель лайниджа целиком переехали в Airflow
+Variable `openlineage_config` (формат — ниже) и правятся в UI (**Admin → Variables**) — правка
+действует со **следующего запуска таски**, без рестарта и пересборки контейнера.
 
 OL-листенер **не** включён глобально в общий `spark-defaults.conf` — иначе он навешивался бы и на
 интерактивный `spark-shell` и ломал его. Вместо этого OL инжектится **точечно, на стороне каждого
 рантайма**, который должен писать лайнидж:
-- **Airflow** — cluster policy `task_policy` в `airflow/config/airflow_local_settings.py` домешивает
-  OL-конфиг в `conf` каждого `SparkSubmitOperator` (без правок в DAG'ах). Джобы идут в
-  `deploy-mode=cluster`, `spark.yarn.jars` не задан → spark-submit заливает клиентский
-  `$SPARK_HOME/jars` как classpath драйвера. Поэтому openlineage-spark jar **удалён из
-  airflow-образа** (`airflow/Dockerfile`) и берётся **из HDFS** через `spark.jars=$OPENLINEAGE_JAR`
-  (та же policy) — прод-подобно: на проде jar лежит в HDFS, а не под SPARK_HOME. Jar заливается в
-  HDFS скриптом `scripts/seed-openlineage-jar.bat` (вызывается из `start-cluster.bat` автоматически);
-- **Jupyter** — `PYSPARK_SUBMIT_ARGS` в `jupyter/scripts/start-jupyter.sh` (только для Spark-сессий ноутбуков);
+- **Airflow** — cluster policy `task_policy` (`airflow/config/airflow_local_settings.py`, точка
+  входа, которую Airflow ищет по имени файла) без собственной логики делегирует всё пакету
+  `airflow/config/ol_policy/`; тот домешивает OL-конфиг в `conf` каждого `SparkSubmitOperator` (без
+  правок в DAG'ах). Джобы идут в `deploy-mode=cluster`, `spark.yarn.jars` не задан → spark-submit
+  заливает клиентский `$SPARK_HOME/jars` как classpath драйвера. Поэтому openlineage-spark jar
+  **удалён из airflow-образа** (`airflow/Dockerfile`) и берётся **из HDFS**: политика дописывает
+  jar-URI из поля `openlineage_jar` Variable в атрибут `jars` оператора (тот уезжает в `--jars`,
+  который вытесняет `spark.jars` как источник значения — запись того же мерджа в `conf["spark.jars"]`
+  была бы им перекрыта и потеряна). Jar заливается в HDFS скриптом `scripts/seed-openlineage-jar.bat`
+  (вызывается из `start-cluster.bat` автоматически). Наличие jar проверяется зондом WebHDFS по
+  эндпоинтам из `HADOOP_CONF_DIR` **на рендере таски**, на воркере (см. ниже) — не на парсе
+  DAG-файла: нет jar — лайнидж не включается, чтобы джоба не упала с `ClassNotFoundException`;
+- **Jupyter** — `PYSPARK_SUBMIT_ARGS` в `jupyter/scripts/start-jupyter.sh` (свой независимый конфиг
+  только для Spark-сессий ноутбуков, `OPENLINEAGE_URL`/`OPENLINEAGE_NAMESPACE` этого файла эту
+  Variable не используют и не читают);
 - **Kyuubi** — `spark.*`-ключи в `kyuubi/config/kyuubi-defaults.conf` (пробрасываются в порождаемый engine).
 
-Поэтому `spark-shell` и «голая» нода `hadoop`/history листенер не грузят. DAG'ам не следует
-переопределять `spark.extraListeners` в своём `conf`: ключ не аддитивен и собьёт OL.
+Поэтому `spark-shell` и «голая» нода `hadoop`/history листенер не грузят.
+
+#### Конфиг лайниджа Airflow: Variable `openlineage_config`
+
+Адрес Marquez, namespace, jar и общий выключатель лайниджа живут в Airflow Variable
+`openlineage_config`, а не в окружении. Правится в UI (**Admin → Variables**), подхватывается
+**со следующего запуска таски**, без рестарта и пересборки. Значение — JSON-объект с тремя ключами:
+`enabled` (bool), `spark_conf` (object) и `openlineage_jar` (строка, HDFS-URI со схемой). Пример —
+ровно то, чем контейнер сидирует Variable при первом старте (`airflow/scripts/start-airflow.sh`):
+
+```json
+{
+    "enabled": true,
+    "spark_conf": {
+        "spark.extraListeners": "io.openlineage.spark.agent.OpenLineageSparkListener",
+        "spark.openlineage.transport.type": "http",
+        "spark.openlineage.transport.url": "http://marquez:5000",
+        "spark.openlineage.namespace": "hadoop-cluster",
+        "spark.openlineage.columnLineage.datasetLineageEnabled": "true"
+    },
+    "openlineage_jar": "hdfs://namenode:9000/opt/openlineage/openlineage-spark_2.13-1.46.0.jar"
+}
+```
+
+- Из `spark_conf` политика читает ровно **три** ключа: `spark.extraListeners`,
+  `spark.openlineage.transport.url` и `spark.openlineage.namespace`. Остальные ключи объекта
+  (`spark.openlineage.transport.type`, `spark.openlineage.columnLineage.datasetLineageEnabled`) она
+  не читает вовсе — те же два значения (`transport.type=http`,
+  `columnLineage.datasetLineageEnabled=true`) политика прописывает в conf таски сама; держать их в
+  `spark_conf` можно для полноты картины, на инъекцию это не влияет. Никакие другие ключи `spark_conf`
+  в conf таски не попадают.
+- Полное имя класса listener'а (`io.openlineage.spark.agent.OpenLineageSparkListener`) нигде не
+  зашито в код политики — оно живёт только в значении Variable (пример выше — из
+  `start-airflow.sh`) и в этом README.
+- Переменная сидится при первом старте контейнера значением, показанным выше. Дальше правка `.env`
+  на неё не влияет: источник конфигурации — Variable. Перезасеять дефолтами:
+  `OPENLINEAGE_CONFIG_RESEED=true` в `.env` + перезапуск.
+- Лайнидж включается, только если `enabled: true` **и** все три поля `spark_conf` из списка выше
+  заполнены **и** `openlineage_jar` — непустой URI со схемой, файл которого фактически лежит в HDFS
+  (зонд WebHDFS на рендере). Неполный или битый конфиг = «лайниджа нет» плюс предупреждение в логе
+  таски; молча выключается ровно один случай — честный `enabled: false` (или форс-выключение из
+  DAG'а, см. ниже).
+- Ключ `auth` в Variable **не поддерживается**: любое значение из conf уезжает в командную строку
+  `spark-submit` и видно в `ps` и в YARN.
+
+#### Мердж DAG-conf и Variable
+
+Таска сама вправе задать `spark.extraListeners`, `jars`/`conf["spark.jars"]`,
+`spark.openlineage.transport.url` и `spark.openlineage.namespace` — политика не затирает их молча:
+
+- **`spark.extraListeners`** — **мердж**: сначала листенеры, которые перечислил DAG, затем
+  OL-listener из Variable; дубликаты убираются, порядок сохраняется.
+- **jar'ы** — тоже **мердж**: атрибут `jars` и `conf["spark.jars"]` таски складываются с
+  `openlineage_jar` из Variable в одну CSV-строку без дублей; итог пишется **в атрибут `jars`
+  оператора** (`--jars` при сабмите), а **не** в `conf["spark.jars"]` — иначе запись потерялась бы,
+  вытесненная тем же `--jars`.
+- **`spark.openlineage.transport.url`** и **`spark.openlineage.namespace`** — здесь **побеждает
+  OpenLineage**: значение из Variable подставляется целиком, DAG-значение того же ключа в результат
+  не входит (только упоминается в логе как перебитое).
+- Отказ от лайниджа (форс-выключение, `enabled: false`, неполный конфиг Variable или отсутствующий
+  в HDFS jar) не стирает то, что DAG сам положил в `jars`/`conf` — политика возвращает собственное
+  значение DAG'а, а не пустую строку.
+- Если значение, которое DAG положил в `jars` или `spark.extraListeners`, содержит своё
+  Jinja-выражение (`{{ ... }}`, `{% ... %}`) или кавычку, политика не может безопасно вложить его
+  литералом в вызов макроса — а значит, не может выполнить по нему дедупликацию. Таску это не рушит
+  и значение DAG'а не теряет: OL-часть дописывается через запятую справа от исходного текста, а в
+  лог таски уходит warning о невозможном дедупе.
+- Технически это два прохода. На **парсе** DAG-файла политика видит исходные DAG-значения и только
+  собирает строки — текст вызова Jinja-макроса `__openlineage_v1(...)`, при необходимости рядом с
+  текстом DAG'а; Variable и HDFS на парсе не читаются (иначе сеть и метастор в этой точке жгли бы
+  бюджет `[core] dag_file_processor_timeout` шедулера на каждый цикл разбора DAG-bag'а). Сами
+  значения (адрес, namespace, jar) и зонд HDFS происходят **на рендере**, когда Jinja вызывает
+  макрос уже на воркере, при исполнении конкретной таски.
+
+#### Тумблер лайниджа в DAG'е
+
+Ключ `openlineage` в `params` форсирует решение поверх Variable — на уровне таски или всего DAG'а:
+
+```python
+with DAG(dag_id="spark_etl_dag", params={"openlineage": False}, ...):      # весь DAG без лайниджа
+    SparkSubmitOperator(task_id="aggregate", params={"openlineage": True}, ...)  # а эта таска — с ним
+```
+
+- Решение принимается **на парсе DAG-файла**. Тумблер виден в форме «Trigger DAG w/ config», но
+  правка в ней ни на что не влияет: инъекция уже произошла.
+- **Объявление ключа — это уже решение, а не подпись к нему.** `Param(True/False, ...)` резолвится в
+  свой дефолт и работает как постоянный форс. Нейтральных вариантов два: не объявлять ключ вовсе
+  (обычный случай, так сделано в обоих DAG'ах стенда) либо
+  `Param(None, type=["null", "boolean"], description=...)` — `None` нейтрален и предупреждений не пишет.
+- Форс-включение **не обходит** ни зонд jar, ни проверку полноты конфига: `True` при недоступном jar
+  или негодном `url` лайнидж не включит, но напишет предупреждение с `dag_id` и `task_id`.
+- Форс-выключение — единственный случай, когда политика молчит: объяснять там нечего.
+
+Юнит-тесты политики лежат рядом с ней (`airflow/config/tests`) и гоняются
+`tests\test-policy.bat`.
 
 ## Подключения
 
@@ -355,7 +459,8 @@ tests\test-cluster.bat
 | Hive | `tests\test-hive.bat` | HiveServer2, создание таблиц, SQL-запросы, Metastore |
 | Kyuubi | `tests\test-kyuubi.bat` | Beeline, Spark SQL таблицы, приложения в YARN (нужен профиль `kyuubi`, см. "Опциональные сервисы") |
 | OpenLineage | `tests\test-openlineage.bat` | Marquez API/Web, guard отсутствия OL-листенера в общем `spark-defaults.conf`, чистый прямой submit |
-| Airflow | `tests\test-airflow.bat` | Health контейнеров, импорт DAG'ов, прогон обоих DAG'ов, артефакты в HDFS и лайнидж |
+| Airflow | `tests\test-airflow.bat` | Health контейнеров, импорт DAG'ов, прогон обоих DAG'ов, артефакты в HDFS и лайнидж, инъекция OL и тумблер в собранной команде |
+| Cluster policy | `tests\test-policy.bat` | Юнит-тесты `airflow/config/tests` внутри контейнера: тумблер, обе раскладки атрибутов провайдера, зонд jar, разбор конфигов кластера |
 
 ## Ручное управление
 
