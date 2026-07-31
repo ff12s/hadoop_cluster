@@ -11,6 +11,7 @@ from __future__ import annotations
 import importlib
 import io
 import json
+import logging
 import sys
 import threading
 import time
@@ -1346,8 +1347,75 @@ def test_macro_listener_comes_from_variable(variable: Callable[..., SimpleNamesp
     assert ol_policy.ol_macro("listener") == "com.example.X"
 
 
-def test_listener_constant_absent() -> None:
-    """Инвариант 12: класс листенера больше не хардкодится константой модуля."""
+def _variable_full(variable: Callable[..., SimpleNamespace], listener: str = "io.ol.L") -> None:
+    """Сидирует годную Variable нового формата.
+
+    :param variable: фикстура подмены Variable.
+    :param listener: класс listener'а, который окажется в spark_conf.
+    :return: None.
+    """
+    variable(raw=json.dumps({
+        "enabled": True,
+        "spark_conf": {
+            "spark.extraListeners": listener,
+            "spark.openlineage.transport.url": "http://marquez:5000",
+            "spark.openlineage.namespace": "hadoop-cluster",
+        },
+        "openlineage_jar": "hdfs://namenode:9000/o.jar",
+    }))
+
+
+def test_macro_listener_without_dag_value(variable: Callable[..., SimpleNamespace]) -> None:
+    """Канал '': listener берётся из Variable и возвращается без разделителя."""
+    _variable_full(variable)
+
+    assert ol_policy.ol_macro("listener", None, "") == "io.ol.L"
+
+
+def test_macro_listener_merges_literal_dag_csv(variable: Callable[..., SimpleNamespace]) -> None:
+    """Канал-литерал: DAG-listener'ы первыми, наш последним."""
+    _variable_full(variable)
+
+    merged = ol_policy.ol_macro("listener", None, "com.example.A,com.example.B")
+
+    assert merged == "com.example.A,com.example.B,io.ol.L"
+
+
+def test_macro_listener_dedups_our_class(variable: Callable[..., SimpleNamespace]) -> None:
+    """DAG уже назвал наш класс — второй раз он не появляется."""
+    _variable_full(variable)
+
+    assert ol_policy.ol_macro("listener", None, "io.ol.L,com.example.A") == "io.ol.L,com.example.A"
+
+
+def test_macro_listener_prefixes_comma_for_jinja_channel(variable: Callable[..., SimpleNamespace]) -> None:
+    """Канал None: значение дописывается с ведущей запятой."""
+    _variable_full(variable)
+
+    assert ol_policy.ol_macro("listener", None, None) == ",io.ol.L"
+
+
+def test_macro_url_wins_over_dag_value(
+    variable: Callable[..., SimpleNamespace], caplog: pytest.LogCaptureFixture
+) -> None:
+    """OL побеждает по url; DAG-значение попадает только в лог."""
+    _variable_full(variable)
+    caplog.set_level(logging.INFO)
+
+    assert ol_policy.ol_macro("url", None, "http://dag-marquez:5000") == "http://marquez:5000"
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("dag-marquez" in message and "marquez:5000" in message for message in messages)
+
+
+def test_macro_namespace_returns_variable_value(variable: Callable[..., SimpleNamespace]) -> None:
+    """namespace возвращается скаляром, без разделителей."""
+    _variable_full(variable)
+
+    assert ol_policy.ol_macro("namespace", None, "") == "hadoop-cluster"
+
+
+def test_listener_constant_is_gone() -> None:
+    """Инвариант 12: класс listener'а не хардкодится в политике."""
     assert not hasattr(ol_policy, "LISTENER")
 
 
@@ -1663,10 +1731,19 @@ def test_template_renders_in_sandboxed_environment(monkeypatch: pytest.MonkeyPat
     """Инжектируемые шаблоны рендерятся окружением DAG'а без ошибок."""
     from airflow.models import DAG
 
+    listener = "io.openlineage.spark.agent.OpenLineageSparkListener"
     monkeypatch.setattr(
         ol_policy,
         "_cfg",
-        lambda: {"enabled": True, "url": "http://marquez:5000", "namespace": "hadoop-cluster"},
+        lambda: {
+            "enabled": True,
+            "spark_conf": {
+                "spark.extraListeners": listener,
+                "spark.openlineage.transport.url": "http://marquez:5000",
+                "spark.openlineage.namespace": "hadoop-cluster",
+            },
+            "openlineage_jar": "hdfs://namenode:9000/o.jar",
+        },
     )
     dag = DAG(dag_id="render_probe", schedule=None, start_date=None)
     dag.user_defined_macros = {ol_policy.MACRO: ol_policy.ol_macro}
@@ -1675,7 +1752,7 @@ def test_template_renders_in_sandboxed_environment(monkeypatch: pytest.MonkeyPat
 
     rendered = {key: env.from_string(value).render() for key, value in template.items()}
 
-    assert rendered["spark.extraListeners"] == ol_policy.LISTENER
+    assert rendered["spark.extraListeners"] == listener
     assert rendered["spark.openlineage.transport.url"] == "http://marquez:5000"
     assert rendered["spark.openlineage.namespace"] == "hadoop-cluster"
 

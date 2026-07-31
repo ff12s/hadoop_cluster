@@ -37,7 +37,6 @@ from . import hadoop_conf
 from .logger import logger as _logger
 
 MACRO = "__openlineage_v1"
-LISTENER = "io.openlineage.spark.agent.OpenLineageSparkListener"
 VARIABLE = "openlineage_config"
 
 # Ограничители зонда (§6.1): дедлайн на весь перебор, таймаут одного эндпоинта,
@@ -337,31 +336,77 @@ def _merge_jars_pair(dag_cur: object, our_jar: object) -> str:
     return utils.merge_jars(dag_cur, None, our_jar if isinstance(our_jar, str) else "")
 
 
-def ol_macro(field: str, forced: bool | None = None) -> str:
-    """Единственная точка решения «включён ли лайнидж» и единственный источник значений.
+def _scalar(value: str, dag_cur: str | None, key: str) -> str:
+    """Возвращает скалярное значение lineage-ключа, логируя перебитое DAG-значение.
 
-    Зовётся из Jinja на рендере таски. Не бросает никогда: битый конфиг обязан
-    давать «лайниджа нет», а не падение рендера.
+    Разделителя у скаляра нет: OL побеждает целиком, ключ уже перекрыт на парсе.
 
-    :param field: "listener", "url" либо "namespace".
-    :param forced: True, если DAG форсировал включение; None — форса нет.
-    :return: значение поля либо "", если лайнидж выключен или конфиг негоден.
+    :param value: значение из Variable, прошедшее ``_clean``.
+    :param dag_cur: DAG-значение того же ключа либо ``None``, если оно не литерализуемо.
+    :param key: имя ключа conf для лога.
+    :return: значение из Variable; "" если оно негодно.
     """
+    if not value:
+        logger.warn_once(("bad-field",), "OpenLineage не включён: в Variable openlineage_config негодно поле %s", key)
+        return ""
+    if dag_cur:
+        _logger.info("ol_policy: %s в DAG-conf=%s переопределяется OL-значением=%s", key, dag_cur, value)
+    else:
+        _logger.info("ol_policy: %s подмешан: %s", key, value)
+    return value
+
+
+def _resolve_jar(cfg: dict[str, object], dag_cur: str | None) -> str:
+    """Заглушка Task 6: реализация зонда приезжает в Task 7.
+
+    :param cfg: разобранный конфиг из ``_validate_cfg``.
+    :param dag_cur: канал DAG-значения jar'ов.
+    :return: пустая строка.
+    """
+    del cfg, dag_cur
+    return ""
+
+
+def ol_macro(field: str, forced: bool | None = None, dag_cur: str | None = "") -> str:
+    """Рендер-функция: единственный источник значений лайниджа. Зовётся Jinja на воркере.
+
+    Не бросает никогда: битый конфиг обязан давать «лайниджа нет», а не падение
+    рендера всей таски.
+
+    :param field: "listener", "url", "namespace" либо "jar".
+    :param forced: True — DAG форсировал включение, False — форс-выключение, None — форса нет.
+    :param dag_cur: канал DAG-значения, выбранный парсом. ``""`` — DAG ключ не задавал,
+        строка — безопасный литерал, ``None`` — текст DAG'а стоит слева от вызова.
+        Для скаляров ``url`` и ``namespace`` — только материал конфликтного лога.
+    :return: значение для подстановки; "" если лайнидж выключен или конфиг негоден.
+    """
+    if forced is False:
+        _logger.info("ol_policy: лайнидж выключен форсом DAG-уровня")
+        return ""
     cfg = _cfg()
     if cfg is None:
         return ""
     enabled = cfg.get("enabled")
-    if not (forced is True or enabled is True):
-        # Молча — только когда выключение осознанное: enabled ровно False.
-        if enabled is not False:
-            logger.warn_once(("bad-enabled",), "OpenLineage выключен: в Variable openlineage_config поле enabled отсутствует или не является булевым")
+    if forced is not True and enabled is not True:
+        _logger.info("ol_policy: лайнидж выключен, Variable.enabled=false и форса DAG'а нет")
         return ""
-    url = _clean(cfg.get("url"), require_scheme=True)
-    namespace = _clean(cfg.get("namespace"))
-    if not url or not namespace:
-        logger.warn_once(("bad-field",), "OpenLineage не включён: в Variable openlineage_config негодно поле %s", "url" if not url else "namespace")
+    cfg = _validate_cfg()
+    if cfg is None:
         return ""
-    return {"listener": LISTENER, "url": url, "namespace": namespace}.get(field, "")
+    spark_conf_obj: object = cfg.get("spark_conf", {})
+    spark_conf: dict[str, object] = spark_conf_obj if isinstance(spark_conf_obj, dict) else {}
+    if field == "listener":
+        return _emit(_clean(spark_conf.get("spark.extraListeners")), dag_cur, merge_listeners, "spark.extraListeners")
+    if field == "url":
+        return _scalar(_clean(spark_conf.get("spark.openlineage.transport.url"), require_scheme=True),
+                       dag_cur, "spark.openlineage.transport.url")
+    if field == "namespace":
+        return _scalar(_clean(spark_conf.get("spark.openlineage.namespace")), dag_cur,
+                       "spark.openlineage.namespace")
+    if field == "jar":
+        return _resolve_jar(cfg, dag_cur)
+    _logger.info("ol_policy: неизвестное поле макроса %s — подстановки нет", field)
+    return ""
 
 
 def ol_conf_template(forced_on: bool) -> dict[str, str]:
