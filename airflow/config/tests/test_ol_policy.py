@@ -907,7 +907,7 @@ def test_probe_401_retries_with_negotiate_header(
     def _handler(url: object) -> object:
         if isinstance(url, Request):
             assert url.get_header("Authorization") == "Negotiate " + base64.b64encode(b"tok").decode("ascii")
-            return SimpleNamespace(status=200, __enter__=lambda s: s, __exit__=lambda s, *a: False)
+            return FakeResponse(200)
         return _http_error(401)
 
     urls = requests_log(_handler)
