@@ -4,742 +4,49 @@ OL-листенер вынесен из общего ``spark-defaults.conf`` (о
 ``spark-shell``), поэтому Airflow навешивает лайнидж своим ``SparkSubmitOperator``
 сам — без правок в DAG'ах.
 
-Что где решается. На **парсе** DAG-файла решается только то, для чего не нужны
-Variable, метастор и сеть: подходит ли таска, не выключил ли лайнидж сам DAG
-(``params``), и в conf/атрибут ``jars`` кладутся строки с вызовом макроса
-``__openlineage_v1``. Сам макрос политика кладёт в ``dag.user_defined_macros``.
-Значения — адрес, namespace, класс listener'а и jar — читаются на **рендере**
-шаблонов, когда Jinja вызывает макрос на воркере: там же jar проверяется в HDFS.
-Так парс не ходит ни в БД, ни в сеть, а правка Variable в UI действует со
-следующего запуска таски.
+Пакет разложен по фазам жизненного цикла политики: ``parse`` собирает строки на
+разборе DAG-файла, ``render`` резолвит значения на воркере, ``variable`` читает
+Airflow Variable, ``probe`` ходит в HDFS, ``operator`` знает про две раскладки
+провайдера. Здесь остаётся только точка входа и общий сброс состояния.
 
 Политика ничего не роняет: любая ошибка гасится и превращается в «лайниджа нет».
-Модуль намеренно не импортирует Airflow на уровне модуля — импорт идёт внутри
+Ни один модуль пакета не импортирует Airflow на уровне модуля — импорт идёт внутри
 функций, поэтому набор тестов запускается без установленного Airflow.
 """
 
 from __future__ import annotations
 
-import functools
-import importlib
-import json
-import threading
-from types import SimpleNamespace
-from typing import Callable, Tuple, Type
-from urllib.error import HTTPError
-from urllib.parse import quote, urlparse
-from urllib.request import urlopen
-
-from . import handlers
 from . import logger
+from . import operator
+from . import parse
+from . import probe
+from . import render
 from . import utils
-from . import hadoop_conf
-from .logger import logger as _logger
-
-MACRO = "__openlineage_v1"
-VARIABLE = "openlineage_config"
-
-# Значение с этими фрагментами нельзя вложить литералом в текст вызова макроса:
-# Jinja порвётся на вложенных скобках, кавычка — на самой кавычке, а обратный
-# слэш Jinja развернёт как escape внутри строкового литерала ("C:\new.jar"
-# приедет как "C:" + перевод строки + "ew.jar").
-_UNSAFE_FOR_LITERAL = ("{{", "{%", "'", '"', "\\")
-
-# Ограничители зонда (§6.1): дедлайн на весь перебор, таймаут одного эндпоинта,
-# TTL мемо. Модульные, потому что тесты подменяют их monkeypatch'ем.
-_PROBE_DEADLINE_SEC = 5.0
-ENDPOINT_TIMEOUT_SEC = 2.0
-_MEMO_TTL_SEC = 300.0
-
-# Ре-экспорт time-источника для тестов: monkeypatch.setattr(ol_policy, "_now", ...)
-# должен попасть в нужный символ, а не в ``utils.now``.
-_now = utils.now
-
-# Мемо зонда: jar_uri -> (available, timestamp). Время — по ``_now``.
-_jar_memo: dict[str, tuple[bool, float]] = {}
-
-# Кортеж собирается лениво, при первом вызове политики: airflow_local_settings
-# импортируется из settings.initialize() до configure_orm(), и импорт подмодуля
-# Airflow на импорте политики шёл бы из частично инициализированного пакета.
-_PASSTHROUGH_NAMES = ("AirflowTaskTimeout", "AirflowClusterPolicyViolation", "AirflowClusterPolicySkipDag")
-_passthrough_cache: tuple[type[BaseException], ...] | None = None
-
-_ATTR_CANDIDATES: dict[str, tuple[str, ...]] = {"conf": ("conf", "_conf"), "jars": ("jars", "_jars")}
-
-
-
-# ---------------------------------------------------------------------------
-# Служебное: лог, время, состояние модуля
-# ---------------------------------------------------------------------------
-
-def passthrough_exceptions() -> Tuple[Type[BaseException], ...]:
-    """Классы исключений, которые политика обязана пропускать наружу.
-
-    Собирается поимённо, каждый класс своим ``try/except``: в 2.6.3 нет
-    ``AirflowClusterPolicySkipDag``, и общий ``import`` провалился бы целиком,
-    молча выключив проброс ``AirflowTaskTimeout``.
-
-    :return: кортеж классов; пустой, если Airflow недоступен.
-    """
-    global _passthrough_cache
-    if _passthrough_cache is None:
-        collected: tuple[type[BaseException], ...] = ()
-        for name in _PASSTHROUGH_NAMES:
-            try:
-                collected += (getattr(importlib.import_module("airflow.exceptions"), name),)
-            except (ImportError, AttributeError):
-                continue
-        _passthrough_cache = collected
-
-    return _passthrough_cache
-
-# ---------------------------------------------------------------------------
-# Совместимость двух версий провайдера
-# ---------------------------------------------------------------------------
-
-
-def operator_attrs(task: object) -> SimpleNamespace | None:
-    """Имена атрибутов conf и jars у этого оператора.
-
-    Имя обязано одновременно быть в ``template_fields`` (значит, будет
-    отрендерено) и существовать на объекте (значит, его читает hook). В
-    провайдере 4.1.1 атрибуты приватные, в 4.10.0 — публичные, поэтому имя
-    резолвится, а не зашивается.
-
-    :param task: таска Airflow.
-    :return: пространство имён с полями ``conf`` и ``jars``, либо None,
-        если раскладка незнакома.
-    """
-    fields = set(getattr(task, "template_fields", ()) or ())
-    resolved: dict[str, str] = {}
-    for role, candidates in _ATTR_CANDIDATES.items():
-        for name in candidates:
-            if name in fields and hasattr(task, name):
-                resolved[role] = name
-                break
-        else:
-            return None
-    return SimpleNamespace(**resolved)
-
-
-def _spark_submit_operator() -> type | None:
-    """Класс ``SparkSubmitOperator`` установленного провайдера.
-
-    :return: класс оператора либо None, если провайдера в среде нет.
-    """
-    try:
-        from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
-    except Exception:
-        return None
-    return SparkSubmitOperator
-
-
-def _looks_like_spark_submit(task: object, operator_cls: type) -> bool:
-    """Похожа ли таска на ``SparkSubmitOperator``, не будучи его экземпляром.
-
-    Так распознаются динамически размапленные таски: их conf и jars лежат в
-    ``partial_kwargs``, адресация через ``operator_attrs`` на них не работает.
-
-    :param task: таска Airflow.
-    :param operator_cls: класс оператора установленного провайдера.
-    :return: True, если ``operator_class`` или ``task_type`` указывают на оператор.
-    """
-    operator_class = getattr(task, "operator_class", None)
-    if operator_class is operator_cls:
-        return True
-    name = operator_class if isinstance(operator_class, str) else getattr(operator_class, "__name__", "")
-    return name == operator_cls.__name__ or getattr(task, "task_type", None) == operator_cls.__name__
-
-
-# ---------------------------------------------------------------------------
-# Тумблер из DAG'а
-# ---------------------------------------------------------------------------
-
-
-def _level_forced(owner: object, level: str, dag_id: str, task_id: str) -> bool | None:
-    """Значение тумблера одного уровня лесенки ``params``.
-
-    Ключа нет или он равен None — уровень не высказался, и это нормальное
-    состояние: warning'а нет. Негодное значение пишет warning и трактуется как
-    отсутствующее.
-
-    :param owner: таска либо DAG, чьи ``params`` читаются.
-    :param level: имя уровня для сообщения ("таски" либо "DAG'а").
-    :param dag_id: идентификатор DAG'а для ключа дедупликации.
-    :param task_id: идентификатор таски для ключа дедупликации.
-    :return: True, False либо None, если уровень не высказался.
-    """
-    params = getattr(owner, "params", None)
-    if params is None:
-        return None
-    try:
-        if "openlineage" not in params:
-            return None
-        value = params["openlineage"]
-    except Exception:
-        logger.warn_once(("unreadable-toggle", dag_id, task_id), "OpenLineage: не удалось прочитать params['openlineage'] — уровень %s игнорируется (%s.%s)", level, dag_id, task_id)
-        return None
-    if value is None:
-        return None
-    if isinstance(value, bool):
-        return value
-    logger.warn_once(("bad-toggle", dag_id, task_id), "OpenLineage: params['openlineage'] не является булевым — уровень %s игнорируется (%s.%s)", level, dag_id, task_id)
-    return None
-
-
-def lineage_forced(task: object) -> bool | None:
-    """Форс лайниджа из DAG'а: ``task.params``, затем ``dag.params``.
-
-    :param task: таска Airflow.
-    :return: True — форс-включение, False — форс-выключение, None — решение
-        остаётся за Variable.
-    """
-    dag_id, task_id = utils.dag_and_task_ids(task)
-    forced = _level_forced(task, "таски", dag_id, task_id)
-    if forced is not None:
-        return forced
-    return _level_forced(utils.task_dag(task), "DAG'а", dag_id, task_id)
-
-
-# ---------------------------------------------------------------------------
-# Конфиг из Airflow Variable и макрос рендера
-# ---------------------------------------------------------------------------
-
-
-def _clean(value: object, *, require_scheme: bool = False) -> str:
-    """Годное значение поля конфига либо пустая строка.
-
-    :param value: сырое значение из Variable.
-    :param require_scheme: требовать префикс ``http://`` или ``https://``.
-    :return: значение без окружающих пробелов, либо "", если оно негодно.
-    """
-    if not isinstance(value, str):
-        return ""
-    cleaned = value.strip()
-    if require_scheme and not cleaned.startswith(("http://", "https://")):
-        return ""
-    return cleaned
-
-
-@functools.lru_cache(maxsize=1)
-def _cfg() -> dict[str, object] | None:
-    """Конфиг OL из Airflow Variable. Никогда не бросает: при любой ошибке — None.
-
-    Мемо на процесс: значение читается тремя вызовами макроса за один рендер, а
-    процесс запуска таски на воркере живёт одну таску. На исполнителе с
-    переиспользуемыми процессами мемо становится кэшем без TTL — правка Variable
-    подхватится только следующим процессом.
-
-    :return: разобранный конфиг с ключами enabled, spark_conf, openlineage_jar,
-        либо None, если конфиг прочитать не удалось или его форма неверна;
-        причина в этом случае уже записана в лог.
-    """
-    try:
-        from airflow.models import Variable
-
-        raw = Variable.get(VARIABLE, default_var=None)
-    except Exception:
-        logger.warn_once(("var-unavailable",), "OpenLineage выключен: Variable openlineage_config недоступна")
-        return None
-    if not raw:
-        logger.warn_once(("no-var",), "OpenLineage выключен: Variable openlineage_config не задана")
-        return None
-    try:
-        parsed = json.loads(raw)
-    except Exception:
-        logger.warn_once(("bad-json",), "OpenLineage выключен: Variable openlineage_config — не разбираемый JSON")
-        return None
-    if not isinstance(parsed, dict):
-        logger.warn_once(("not-object",), "OpenLineage выключен: Variable openlineage_config — не JSON-объект")
-        return None
-    if "auth" in parsed:
-        logger.warn_once(("auth",), "OpenLineage: ключ 'auth' в Variable не поддерживается и не подставляется")
-    # Форма проверяется здесь, содержимое полей — в _validate_cfg: тут решается,
-    # тот ли это документ вообще, там — годится ли он для включения лайниджа.
-    shape_ok = (
-        isinstance(parsed.get("enabled"), bool)
-        and isinstance(parsed.get("spark_conf"), dict)
-        and isinstance(parsed.get("openlineage_jar"), str)
-    )
-    if not shape_ok:
-        logger.warn_once(
-            ("bad-shape",),
-            "OpenLineage выключен: Variable openlineage_config должна иметь ключи "
-            "enabled (bool), spark_conf (object), openlineage_jar (str)",
-        )
-        return None
-    return parsed
-
-
-@functools.lru_cache(maxsize=1)
-def _validate_cfg() -> dict[str, object] | None:
-    """Проверяет годность Variable один раз на процесс: недостающие поля — одним warning'ом.
-
-    Аргументов нет намеренно: под ``lru_cache`` они хэшируются, а разобранный
-    конфиг — dict, и любой вызов упал бы с ``TypeError: unhashable type``.
-
-    :return: конфиг из ``_cfg``, либо None, если он непригоден для включения лайниджа.
-    """
-    cfg = _cfg()
-    if cfg is None:
-        return None
-    spark_conf_obj: object = cfg.get("spark_conf", {})
-    spark_conf: dict[str, object] = spark_conf_obj if isinstance(spark_conf_obj, dict) else {}
-    missing: list[str] = []
-    if not _clean(spark_conf.get("spark.extraListeners")):
-        missing.append("spark_conf.spark.extraListeners (непустая строка)")
-    if not _clean(spark_conf.get("spark.openlineage.transport.url"), require_scheme=True):
-        missing.append("spark_conf.spark.openlineage.transport.url (http/https URL)")
-    if not _clean(spark_conf.get("spark.openlineage.namespace")):
-        missing.append("spark_conf.spark.openlineage.namespace (непустая строка)")
-    jar_uri = cfg.get("openlineage_jar")
-    if not (isinstance(jar_uri, str) and jar_uri.strip()):
-        missing.append("openlineage_jar (hdfs://... URI)")
-    if missing:
-        logger.warn_once(
-            ("var-incomplete",),
-            "OpenLineage не включён: Variable openlineage_config неполна: %s",
-            ", ".join(missing),
-        )
-        return None
-    return cfg
-
-
-def _refusal(dag_cur: str | None) -> str:
-    """Значение канала при отказе лайниджа: собственное значение DAG'а не теряется.
-
-    Отказ (форс-выключение, ``enabled: false``, битая или неполная Variable) не
-    должен стирать то, что DAG положил в conf/``jars`` сам, по причинам, не
-    связанным с лайниджем. Канал ``None`` в этом правиле не участвует: текст
-    DAG'а там уже стоит слева от вызова макроса (см. ``_dag_channel``), и
-    подставлять его повторно значило бы задвоить.
-
-    :param dag_cur: канал DAG-значения из ``_dag_channel``.
-    :return: ``dag_cur``, если это строка; иначе "".
-    """
-    return dag_cur if isinstance(dag_cur, str) else ""
-
-
-def _emit(value: str, dag_cur: str | None, merge: Callable[[object, object], str], key: str) -> str:
-    """Оформляет наше значение под тот канал, которым парс передал DAG-значение.
-
-    Единственное место, где решается разделитель: пустой результат макроса не
-    должен оставлять в conf висячую запятую.
-
-    :param value: наше значение из Variable, уже прошедшее ``_clean``.
-    :param dag_cur: канал, выбранный парсом: ``""`` — DAG молчал, строка —
-        безопасный литерал DAG-значения, ``None`` — текст DAG'а стоит слева.
-    :param merge: ``utils.merge_listeners`` либо ``_merge_jars_pair``.
-    :param key: имя ключа conf для лога.
-    :return: строка для подстановки на месте вызова макроса.
-    """
-    if dag_cur is None:
-        _logger.info("ol_policy: %s дописан к DAG-значению, дедуп невозможен: %s", key, value)
-        return f",{value}"
-    if not dag_cur:
-        _logger.info("ol_policy: %s подмешан: %s", key, value)
-        return value
-    merged = merge(dag_cur, value)
-    _logger.info("ol_policy: %s мердж: %s", key, merged)
-    return merged
-
-
-def _merge_jars_pair(dag_cur: object, our_jar: object) -> str:
-    """Мердж двух источников jar'ов — форма, которую ждёт ``_emit``.
-
-    Третий канал (``conf["spark.jars"]``) склеен с атрибутом ``jars`` ещё на
-    парсе, поэтому на рендере источников ровно два.
-
-    :param dag_cur: склеенные на парсе jar'ы DAG'а.
-    :param our_jar: URI openlineage-spark jar'а.
-    :return: список jar'ов через запятую, без дубликатов, с сохранением порядка.
-    """
-    return utils.merge_jars(dag_cur, None, our_jar if isinstance(our_jar, str) else "")
-
-
-def _scalar(value: str, dag_cur: str | None, key: str) -> str:
-    """Возвращает скалярное значение lineage-ключа, логируя перебитое DAG-значение.
-
-    Разделителя у скаляра нет: OL побеждает целиком, ключ уже перекрыт на парсе.
-
-    :param value: значение из Variable, прошедшее ``_clean``.
-    :param dag_cur: DAG-значение того же ключа либо ``None``, если оно не литерализуемо.
-    :param key: имя ключа conf для лога.
-    :return: значение из Variable; "" если оно негодно.
-    """
-    if not value:
-        logger.warn_once(
-            ("bad-field", key),
-            "OpenLineage не включён: в Variable openlineage_config негодно поле %s",
-            key,
-        )
-        return ""
-    if dag_cur:
-        _logger.info("ol_policy: %s в DAG-conf=%s переопределяется OL-значением=%s", key, dag_cur, value)
-    else:
-        _logger.info("ol_policy: %s подмешан: %s", key, value)
-    return value
-
-
-def _jar_ok(cfg: dict[str, object], *, log: bool = False) -> bool:
-    """Подтверждён ли openlineage-jar в HDFS — общий гейт всего лайниджа.
-
-    Инвариант 19: ``spark.extraListeners`` без jar'а на classpath роняет драйвер
-    ``ClassNotFoundException``, поэтому неподтверждённый jar выключает лайнидж
-    целиком, а не одну только ветку ``jar``. Зонд мемоизирован по URI, так что
-    четыре ветки макроса за один рендер стоят одного похода в сеть, а порядок
-    рендера ``conf`` и ``jars`` перестаёт что-либо значить.
-
-    :param cfg: разобранный конфиг из ``_validate_cfg``.
-    :param log: писать ли причину отказа. True только у ветки ``jar``: иначе три
-        остальные ветки того же рендера продублировали бы одно сообщение.
-    :return: True, если jar подтверждён в HDFS; False при любом отказе.
-    """
-    jar_uri_obj = cfg.get("openlineage_jar")
-    jar_uri = jar_uri_obj.strip() if isinstance(jar_uri_obj, str) else ""
-    if not jar_uri:
-        if log:
-            _logger.warning("OpenLineage не включён: openlineage_jar в Variable не задан")
-        return False
-    path = jar_path(jar_uri)
-    if path is None:
-        if log:
-            _logger.warning("OpenLineage не включён: openlineage_jar задан без схемы или без пути (%s)", jar_uri)
-        return False
-    if not jar_available(jar_uri, path):
-        if log:
-            _logger.warning(
-                "OpenLineage не включён: jar отсутствует или недоступен в HDFS (%s). "
-                "Залейте его: scripts/seed-openlineage-jar.bat",
-                jar_uri,
-            )
-        return False
-    return True
-
-
-def _resolve_jar(cfg: dict[str, object], dag_cur: str | None) -> str:
-    """Оформляет URI подтверждённого jar'а под канал DAG-значения.
-
-    Ветка ``jar`` — единственная, которая называет причину отказа зонда: остальные
-    три гейтятся тем же ``_jar_ok`` молча, чтобы один отказ не звучал четырежды.
-
-    :param cfg: разобранный конфиг из ``_validate_cfg``.
-    :param dag_cur: канал DAG-значения jar'ов, выбранный парсом.
-    :return: строка для подстановки в атрибут ``jars``; при любом отказе —
-        собственное значение DAG'а (``dag_cur``, когда это строка, иначе ""), а не
-        пустая строка: отсутствующий в HDFS jar не должен стирать чужой ``jars=``.
-    """
-    if not _jar_ok(cfg, log=True):
-        return _refusal(dag_cur)
-    jar_uri_obj = cfg.get("openlineage_jar")
-    jar_uri = jar_uri_obj.strip() if isinstance(jar_uri_obj, str) else ""
-    return _emit(jar_uri, dag_cur, _merge_jars_pair, "spark.jars")
-
-
-def ol_macro(field: str, forced: bool | None = None, dag_cur: str | None = "") -> str:
-    """Рендер-функция: единственный источник значений лайниджа. Зовётся Jinja на воркере.
-
-    Не бросает никогда: битый конфиг обязан давать «лайниджа нет», а не падение
-    рендера всей таски. Все четыре ветки гейтятся зондом jar'а (инвариант 19):
-    неподтверждённый в HDFS jar выключает лайнидж целиком, иначе listener уехал бы
-    в conf без своего класса на classpath и уронил драйвер.
-
-    :param field: "listener", "url", "namespace" либо "jar".
-    :param forced: True — DAG форсировал включение, False — форс-выключение, None — форса нет.
-    :param dag_cur: канал DAG-значения, выбранный парсом. ``""`` — DAG ключ не задавал,
-        строка — безопасный литерал, ``None`` — текст DAG'а стоит слева от вызова.
-        Для скаляров ``url`` и ``namespace`` — только материал конфликтного лога.
-    :return: значение для подстановки. Если лайнидж выключен или конфиг негоден —
-        собственное значение DAG'а (``dag_cur``, когда это строка, иначе ""), а не
-        пустая строка: отказ от лайниджа не должен стирать чужой ``spark.jars``
-        или ``spark.extraListeners``.
-    """
-    if forced is False:
-        _logger.info("ol_policy: лайнидж выключен форсом DAG-уровня")
-        return _refusal(dag_cur)
-    cfg = _cfg()
-    if cfg is None:
-        return _refusal(dag_cur)
-    enabled = cfg.get("enabled")
-    if forced is not True and enabled is not True:
-        _logger.info("ol_policy: лайнидж выключен, Variable.enabled=false и форса DAG'а нет")
-        return _refusal(dag_cur)
-    cfg = _validate_cfg()
-    if cfg is None:
-        return _refusal(dag_cur)
-    if field == "jar":
-        return _resolve_jar(cfg, dag_cur)
-    if field not in ("listener", "url", "namespace"):
-        _logger.info("ol_policy: неизвестное поле макроса %s — подстановки нет", field)
-        return _refusal(dag_cur)
-    # Инвариант 19: нет jar'а — нет и лайниджа. Listener без jar'а на classpath
-    # роняет драйвер, то есть отказ зонда обязан гасить все ветки, а не одну.
-    if not _jar_ok(cfg):
-        return _refusal(dag_cur)
-    spark_conf_obj: object = cfg.get("spark_conf", {})
-    spark_conf: dict[str, object] = spark_conf_obj if isinstance(spark_conf_obj, dict) else {}
-    if field == "listener":
-        return _emit(_clean(spark_conf.get("spark.extraListeners")), dag_cur, merge_listeners, "spark.extraListeners")
-    if field == "url":
-        return _scalar(_clean(spark_conf.get("spark.openlineage.transport.url"), require_scheme=True),
-                       dag_cur, "spark.openlineage.transport.url")
-    return _scalar(_clean(spark_conf.get("spark.openlineage.namespace")), dag_cur,
-                   "spark.openlineage.namespace")
-
-
-# ---------------------------------------------------------------------------
-# Зонд jar в HDFS
-# ---------------------------------------------------------------------------
-
-
-def jar_path(jar_uri: str) -> str | None:
-    """Путь внутри HDFS из значения поля ``openlineage_jar`` Variable ``openlineage_config``.
-
-    Схема обязательна: значение без схемы ``spark-submit`` трактует в ``--jars``
-    как локальный файл сабмит-хоста, и джоба падает на локализации. Authority
-    (RPC-хост и RPC-порт) игнорируется — эндпоинты WebHDFS даёт резолвер.
-
-    :param jar_uri: значение поля ``openlineage_jar`` из Variable ``openlineage_config``.
-    :return: абсолютный путь для WebHDFS либо None, если значение негодно.
-    """
-    parsed = urlparse(jar_uri.strip())
-    if not parsed.scheme or not parsed.path:
-        return None
-    return parsed.path if parsed.path.startswith("/") else f"/{parsed.path}"
-
-
-def _is_standby(error: HTTPError) -> bool:
-    """Ответил ли standby-NameNode.
-
-    :param error: ответ WebHDFS с кодом 403.
-    :return: True, если в теле лежит ``RemoteException.exception == StandbyException``.
-    """
-    try:
-        body = json.loads(error.read().decode("utf-8", "replace"))
-    except Exception:
-        return False
-    remote = body.get("RemoteException") if isinstance(body, dict) else None
-    return isinstance(remote, dict) and remote.get("exception") == "StandbyException"
-
-
-def _query_endpoint(endpoint: str, path: str) -> str:
-    """Спрашивает один эндпоинт WebHDFS про файл.
-
-    :param endpoint: адрес вида ``http://host:port``.
-    :param path: абсолютный путь файла в HDFS.
-    :return: "found", "absent", "standby" либо "error".
-    """
-    url = f"{endpoint}/webhdfs/v1{quote(path)}?op=GETFILESTATUS"
-    try:
-        with urlopen(url, timeout=ENDPOINT_TIMEOUT_SEC) as response:  # noqa: S310 URL строим мы сами
-            return "found" if response.status == 200 else "error"
-    except HTTPError as error:
-        if error.code == 404:
-            return "absent"
-        if error.code == 403 and _is_standby(error):
-            return "standby"
-        return "error"
-    except Exception:
-        return "error"
-
-
-def _probe(path: str) -> bool:
-    """Перебирает эндпоинты WebHDFS до первого осмысленного ответа.
-
-    Standby-NameNode — не отказ, а «спроси активный». Молчаливым остаётся ровно
-    один исход: 404, то есть кластер ответил и jar'а действительно нет.
-
-    :param path: абсолютный путь jar'а в HDFS.
-    :return: True, если jar есть; False, если его нет либо ни один эндпоинт не ответил.
-    :raises handlers.NoEndpointsError: резолвер не дал ни одного эндпоинта.
-    """
-    endpoints = resolve_webhdfs_urls()
-    if not endpoints:
-        raise handlers.NoEndpointsError(hadoop_conf.hadoop_conf_dir())
-    standby_only = True
-    for endpoint in endpoints:
-        outcome = _query_endpoint(endpoint, path)
-        if outcome == "found":
-            return True
-        if outcome == "absent":
-            return False
-        if outcome != "standby":
-            standby_only = False
-    if standby_only:
-        logger.warn_once(("all-standby",), "OpenLineage не включён: все NameNode ответили standby (%s)", path)
-    else:
-        logger.warn_once(("endpoints-down",), "OpenLineage не включён: эндпоинты WebHDFS недоступны (%s)", path)
-    return False
-
-
-# Ре-экспорт резолвера эндпоинтов, чтобы тесты могли подменять его через
-# ``monkeypatch.setattr(ol_policy, "resolve_webhdfs_urls", ...)``.
-resolve_webhdfs_urls = hadoop_conf.resolve_webhdfs_urls
-
-
-def _probe_worker(path: str, slot: list[tuple[str, object]]) -> None:
-    """Тело демон-потока зонда: кладёт в слот результат либо исключение.
-
-    :param path: абсолютный путь jar'а в HDFS.
-    :param slot: список-слот, куда кладётся ровно один кортеж.
-    :return: None.
-    """
-    try:
-        slot.append(("ok", _probe(path)))
-    except Exception as error:
-        slot.append(("err", error))
-
-
-def jar_available(jar_uri: str, path: str) -> bool:
-    """Лежит ли openlineage-spark jar в HDFS.
-
-    Весь перебор, включая резолв эндпоинтов, уходит в демон-поток: таймаут
-    сокета не покрывает ``getaddrinfo``, а зависший вызов на парсе съедает бюджет
-    ``[core] dag_file_processor_timeout`` и убивает разбор DAG-файла целиком.
-    Результат брошенного потока отбрасывается — мемо пишет ожидающая сторона,
-    иначе две таски одного файла получили бы разные ответы.
-
-    Мемо по ``jar_uri`` с TTL ``_MEMO_TTL_SEC``: поток тасок, который ходит за
-    jar'ом с предсказуемым путём, не должен перегаживать кластер. Поток, доехавший
-    после дедлайна, мемо не переписывает — поздняя запись потеряла бы актуальность.
-
-    :param jar_uri: исходное значение поля ``openlineage_jar`` Variable ``openlineage_config`` —
-        оно же ключ мемо.
-    :param path: разобранный путь jar'а для WebHDFS.
-    :return: True, если jar доступен; False во всех остальных исходах.
-    """
-    cached = _jar_memo.get(jar_uri)
-    if cached is not None:
-        value, stamped = cached
-        if _now() - stamped < _MEMO_TTL_SEC:
-            return value
-        _jar_memo.pop(jar_uri, None)
-
-    slot: list[tuple[str, object]] = []
-    worker = threading.Thread(target=_probe_worker, args=(path, slot), daemon=True, name="openlineage-jar-probe")
-    worker.start()
-    worker.join(_PROBE_DEADLINE_SEC)
-
-    if not slot:
-        available = False
-        logger.warn_once(("probe-deadline",), "OpenLineage не включён: зонд jar не уложился в дедлайн %s с (%s)", _PROBE_DEADLINE_SEC, jar_uri)
-    else:
-        kind, payload = slot[0]
-        if kind == "ok":
-            available = bool(payload)
-        else:
-            available = False
-            if isinstance(payload, handlers.NoEndpointsError):
-                logger.warn_once(("no-endpoints",), "OpenLineage не включён: эндпоинты WebHDFS не определены по HADOOP_CONF_DIR (%s)", payload)
-            else:
-                logger.warn_once(("probe-error",), "OpenLineage не включён: не удалось определить эндпоинты WebHDFS (%s): %s", jar_uri, payload)
-
-    _jar_memo[jar_uri] = (available, _now())
-    return available
-
-
-def _dag_channel(value: object) -> tuple[str, str | None]:
-    """Выбирает канал, которым DAG-значение доедет до макроса.
-
-    Каналов три, и решение принимает парс — единственный, кто видит исходное
-    значение: на рендере прочитать его нечем.
-
-    :param value: значение ключа conf либо атрибута оператора, как его задал DAG.
-    :return: пара ``(prefix, dag_cur)``. ``prefix`` ставится в строку перед вызовом
-        макроса, ``dag_cur`` уходит третьим аргументом макроса.
-    """
-    text = value.strip() if isinstance(value, str) else ""
-    if not text:
-        return "", ""
-    if any(marker in text for marker in _UNSAFE_FOR_LITERAL):
-        return text, None
-    return "", text
-
-
-def _macro_call(field: str, forced: str, dag_cur: str | None) -> str:
-    """Собирает текст вызова макроса для подстановки в conf.
-
-    :param field: имя ветки макроса.
-    :param forced: ``"true"`` либо ``"none"`` — Jinja-литерал форса.
-    :param dag_cur: канал DAG-значения из ``_dag_channel``.
-    :return: строка вида ``{{ __openlineage_v1('field', none, 'value') }}``.
-    """
-    literal = "none" if dag_cur is None else f"'{dag_cur}'"
-    return f"{{{{ {MACRO}('{field}', {forced}, {literal}) }}}}"
-
-
-def inject_openlineage(task: object) -> None:
-    """Навешивает OpenLineage на проверенную Spark-таску: макрос и строки в conf.
-
-    Порядок гейтов нормативен: форс-выключение проверяется раньше всего, поэтому
-    выключивший лайнидж DAG уходит нетронутым. Значения лайниджа сюда не попадают —
-    на парсе собираются только строки с вызовами макроса, а Variable и HDFS
-    читаются на рендере.
-
-    Порядок двух записей тоже нормативен: атрибут ``jars`` пишется раньше conf,
-    поэтому обрыв между ними оставляет таску максимум с лишним jar'ом на classpath,
-    но без листенера — то есть без лайниджа, что безопасно; в обратном порядке
-    обрыв оставил бы листенер без jar'а, а это уже сломанный запуск Spark.
-
-    :param task: экземпляр ``SparkSubmitOperator``; мутируется на месте.
-    :return: None.
-    """
-    dag_id, task_id = utils.dag_and_task_ids(task)
-
-    attrs = operator_attrs(task)
-    if attrs is None:
-        logger.warn_once(("unknown-layout", dag_id, task_id), "OpenLineage не включён: незнакомая раскладка атрибутов оператора (%s.%s)", dag_id, task_id)
-        return
-
-    forced = lineage_forced(task)
-    if forced is False:
-        return
-
-    dag = utils.task_dag(task)
-    if dag is None:
-        logger.warn_once(("no-dag", dag_id, task_id), "OpenLineage не включён: таска не привязана к DAG, макрос положить некуда (%s)", task_id)
-        return
-
-    # Макрос кладётся в DAG политикой намеренно: это единственный способ отложить
-    # чтение Variable до рендера таски, ничего не требуя от автора DAG'а. Чужим
-    # считается только объект, который не является нашей функцией, — иначе вторая
-    # таска файла увидела бы чужим то, что положила первая.
-    macros = dict(getattr(dag, "user_defined_macros", None) or {})
-    if MACRO in macros and macros[MACRO] is not ol_macro:
-        logger.warn_once(("macro-taken", dag_id, task_id), "OpenLineage не включён: имя макроса %s занято чужим объектом (%s.%s)", MACRO, dag_id, task_id)
-        return
-
-    forced_literal = "true" if forced is True else "none"
-    cur_conf = dict(getattr(task, attrs.conf) or {})
-
-    listener_prefix, listener_cur = _dag_channel(cur_conf.get("spark.extraListeners"))
-    # Оба канала jar'ов известны здесь и склеиваются до макроса: на рендере
-    # прочитать их будет нечем.
-    jars_prefix, jars_cur = _dag_channel(utils.merge_jars(getattr(task, attrs.jars), cur_conf.get("spark.jars"), ""))
-    # Для скаляров префикс отбрасывается: OL побеждает целиком, дописывать текст
-    # DAG'а слева значило бы нарушить это правило.
-    _, url_cur = _dag_channel(cur_conf.get("spark.openlineage.transport.url"))
-    _, namespace_cur = _dag_channel(cur_conf.get("spark.openlineage.namespace"))
-
-    if listener_cur is None or jars_cur is None:
-        logger.warn_once(
-            ("jinja-channel", dag_id, task_id),
-            "OpenLineage: DAG-значение содержит Jinja — дедуп значения OL невозможен (%s.%s)",
-            dag_id,
-            task_id,
-        )
-
-    macros[MACRO] = ol_macro
-    dag.user_defined_macros = macros
-    setattr(task, attrs.jars, jars_prefix + _macro_call("jar", forced_literal, jars_cur))
-    setattr(task, attrs.conf, {
-        **cur_conf,
-        "spark.extraListeners": listener_prefix + _macro_call("listener", forced_literal, listener_cur),
-        "spark.openlineage.transport.type": "http",
-        "spark.openlineage.transport.url": _macro_call("url", forced_literal, url_cur),
-        "spark.openlineage.namespace": _macro_call("namespace", forced_literal, namespace_cur),
-        "spark.openlineage.columnLineage.datasetLineageEnabled": "true",
-    })
+from . import variable
+from .operator import lineage_forced, operator_attrs, passthrough_exceptions
+from .parse import MACRO, inject_openlineage
+from .probe import jar_available, jar_path
+from .render import ol_macro
+
+__all__ = [
+    "apply_policy",
+    "reset_state",
+    "jar_available",
+    "jar_path",
+    "inject_openlineage",
+    "ol_macro",
+    "operator_attrs",
+    "lineage_forced",
+    "passthrough_exceptions",
+    "MACRO",
+    "merge_jars",
+    "merge_listeners",
+]
+
+# Реэкспорты ниже — это read-only алиасы: собственный код пакета их не читает,
+# он всегда обращается к атрибуту через модуль-владелец. monkeypatch.setattr(ol_policy, "X", ...)
+# поэтому подменяет только эту переменную здесь, а не вызов внутри модуля-владельца —
+# патчить нужно submodule (ol_policy.probe.X, ol_policy.render.X и т.д.).
 
 
 def apply_policy(task: object) -> None:
@@ -753,16 +60,16 @@ def apply_policy(task: object) -> None:
     :return: None.
     """
     try:
-        operator_cls = _spark_submit_operator()
+        operator_cls = operator._spark_submit_operator()
         if operator_cls is None:
             return
         if not isinstance(task, operator_cls):
-            if _looks_like_spark_submit(task, operator_cls):
+            if operator._looks_like_spark_submit(task, operator_cls):
                 dag_id, task_id = utils.dag_and_task_ids(task)
                 logger.warn_once(("mapped", dag_id, task_id), "OpenLineage не включён: динамический маппинг тасок не поддерживается (%s.%s)", dag_id, task_id)
             return
-        inject_openlineage(task)
-    except passthrough_exceptions():
+        parse.inject_openlineage(task)
+    except operator.passthrough_exceptions():
         raise
     except Exception:
         dag_id, task_id = utils.dag_and_task_ids(task)
@@ -773,17 +80,17 @@ def reset_state() -> None:
     """Сбрасывает всё модульное состояние политики.
 
     Зовётся фикстурой ``_reset_policy_state`` (conftest.py) до и после каждого
-    теста: дедупликация warning'ов, кэш ``_cfg``, мемо зонда и кэш классов
+    теста: дедупликация warning'ов, кэши конфига, мемо зонда и кэш классов
     исключений переживают границу теста и без сброса смешали бы результаты.
+    Единственное место, которое знает обо всех четырёх хранилищах сразу.
 
     :return: None.
     """
-    global _passthrough_cache
     logger._warned.clear()
-    _cfg.cache_clear()
-    _validate_cfg.cache_clear()
-    _jar_memo.clear()
-    _passthrough_cache = None
+    variable._cfg.cache_clear()
+    variable._validate_cfg.cache_clear()
+    probe._jar_memo.clear()
+    operator._passthrough_cache = None
 
 
 # Реэкспорт утилит: тесты и вызывающий код обращаются к ним через пакет политики.

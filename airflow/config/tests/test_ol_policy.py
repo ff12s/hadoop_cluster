@@ -138,7 +138,7 @@ def jar_ok(monkeypatch: pytest.MonkeyPatch, jar_env: str) -> list[tuple[str, str
         calls.append((jar_uri, path))
         return True
 
-    monkeypatch.setattr(ol_policy, "jar_available", _available)
+    monkeypatch.setattr(ol_policy.probe, "jar_available", _available)
     return calls
 
 
@@ -153,7 +153,7 @@ def probe_forbidden(monkeypatch: pytest.MonkeyPatch) -> None:
     def _fail(jar_uri: str, path: str) -> bool:
         raise AssertionError("зонд не должен вызываться")
 
-    monkeypatch.setattr(ol_policy, "jar_available", _fail)
+    monkeypatch.setattr(ol_policy.probe, "jar_available", _fail)
 
 
 @pytest.fixture
@@ -165,7 +165,7 @@ def endpoints(monkeypatch: pytest.MonkeyPatch) -> Callable[[list[str]], None]:
     """
 
     def _set(urls: list[str]) -> None:
-        monkeypatch.setattr(ol_policy, "resolve_webhdfs_urls", lambda: list(urls))
+        monkeypatch.setattr(ol_policy.probe, "resolve_webhdfs_urls", lambda: list(urls))
 
     return _set
 
@@ -187,7 +187,7 @@ def requests_log(monkeypatch: pytest.MonkeyPatch) -> Callable[[Callable[[str], o
                 raise result
             return result
 
-        monkeypatch.setattr(ol_policy, "urlopen", _urlopen)
+        monkeypatch.setattr(ol_policy.probe, "urlopen", _urlopen)
         return urls
 
     return _install
@@ -201,7 +201,7 @@ def clock(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     :return: объект с полем ``now``, которое тест двигает вперёд.
     """
     state = SimpleNamespace(now=1000.0)
-    monkeypatch.setattr(ol_policy, "_now", lambda: state.now)
+    monkeypatch.setattr(ol_policy.probe, "_now", lambda: state.now)
     return state
 
 
@@ -231,37 +231,37 @@ def install_airflow_exceptions(monkeypatch: pytest.MonkeyPatch, names: tuple[str
 
 def test_dag_channel_empty_value() -> None:
     """Пусто, None и пробелы — DAG молчал: префикса нет, канал ''."""
-    assert ol_policy._dag_channel(None) == ("", "")
-    assert ol_policy._dag_channel("") == ("", "")
-    assert ol_policy._dag_channel("   ") == ("", "")
+    assert ol_policy.parse._dag_channel(None) == ("", "")
+    assert ol_policy.parse._dag_channel("") == ("", "")
+    assert ol_policy.parse._dag_channel("   ") == ("", "")
 
 
 def test_dag_channel_safe_literal() -> None:
     """Безопасное значение уходит литералом, префикса нет."""
-    assert ol_policy._dag_channel("a.jar,b.jar") == ("", "a.jar,b.jar")
+    assert ol_policy.parse._dag_channel("a.jar,b.jar") == ("", "a.jar,b.jar")
 
 
 @pytest.mark.parametrize("value", ["{{ params.jars }}", "{% if x %}a.jar{% endif %}", "it's.jar", 'say"hi".jar', r"C:\new.jar"])
 def test_dag_channel_unsafe_value_stays_in_the_string(value: str) -> None:
     """Jinja и кавычки нельзя вложить в текст вызова макроса — значение остаётся слева."""
-    assert ol_policy._dag_channel(value) == (value, None)
+    assert ol_policy.parse._dag_channel(value) == (value, None)
 
 
 def test_macro_call_renders_literal() -> None:
     """Литерал попадает в вызов в одинарных кавычках."""
-    call = ol_policy._macro_call("listener", "none", "com.example.A")
+    call = ol_policy.parse._macro_call("listener", "none", "com.example.A")
 
     assert call == "{{ __openlineage_v1('listener', none, 'com.example.A') }}"
 
 
 def test_macro_call_renders_none_channel() -> None:
     """Канал None рендерится как Jinja-литерал none, а не как строка 'None'."""
-    assert ol_policy._macro_call("jar", "true", None) == "{{ __openlineage_v1('jar', true, none) }}"
+    assert ol_policy.parse._macro_call("jar", "true", None) == "{{ __openlineage_v1('jar', true, none) }}"
 
 
 def test_macro_call_renders_empty_channel() -> None:
     """Канал '' рендерится пустой строкой-литералом."""
-    assert ol_policy._macro_call("url", "none", "") == "{{ __openlineage_v1('url', none, '') }}"
+    assert ol_policy.parse._macro_call("url", "none", "") == "{{ __openlineage_v1('url', none, '') }}"
 
 
 # ---------------------------------------------------------------------------
@@ -390,7 +390,7 @@ def test_dag_force_on_is_used_when_task_is_silent(
 
     ol_policy.inject_openlineage(task)
 
-    assert conf_of(task, layout)["spark.extraListeners"] == ol_policy._macro_call("listener", "true", "")
+    assert conf_of(task, layout)["spark.extraListeners"] == ol_policy.parse._macro_call("listener", "true", "")
     assert warnings_of(caplog) == []
 
 
@@ -402,7 +402,7 @@ def test_missing_toggle_is_neutral_and_silent(
 
     ol_policy.inject_openlineage(task)
 
-    assert conf_of(task, layout)["spark.extraListeners"] == ol_policy._macro_call("listener", "none", "")
+    assert conf_of(task, layout)["spark.extraListeners"] == ol_policy.parse._macro_call("listener", "none", "")
     assert warnings_of(caplog) == []
 
 
@@ -414,7 +414,7 @@ def test_none_toggle_is_neutral_and_silent(
 
     ol_policy.inject_openlineage(task)
 
-    assert conf_of(task, layout)["spark.extraListeners"] == ol_policy._macro_call("listener", "none", "")
+    assert conf_of(task, layout)["spark.extraListeners"] == ol_policy.parse._macro_call("listener", "none", "")
     assert warnings_of(caplog) == []
 
 
@@ -427,7 +427,7 @@ def test_non_bool_toggle_warns_and_falls_through(
 
     ol_policy.inject_openlineage(task)
 
-    assert conf_of(task, layout)["spark.extraListeners"] == ol_policy._macro_call("listener", "none", "")
+    assert conf_of(task, layout)["spark.extraListeners"] == ol_policy.parse._macro_call("listener", "none", "")
     assert any("openlineage" in message for message in warnings_of(caplog))
 
 
@@ -463,7 +463,7 @@ def test_raising_params_warns_and_does_not_break(
 
     ol_policy.inject_openlineage(task)
 
-    assert conf_of(task, layout)["spark.extraListeners"] == ol_policy._macro_call("listener", "none", "")
+    assert conf_of(task, layout)["spark.extraListeners"] == ol_policy.parse._macro_call("listener", "none", "")
     assert any("params" in message for message in warnings_of(caplog))
 
 
@@ -640,7 +640,7 @@ def test_conf_jars_are_taken_into_jars_and_left_intact(
 
     ol_policy.inject_openlineage(task)
 
-    assert jars_of(task, layout) == ol_policy._macro_call("jar", "none", "b.jar")
+    assert jars_of(task, layout) == ol_policy.parse._macro_call("jar", "none", "b.jar")
     assert conf_of(task, layout)["spark.jars"] == "b.jar"
 
 
@@ -650,7 +650,7 @@ def test_both_jar_sources_are_merged(layout: SimpleNamespace, jar_ok: list[tuple
 
     ol_policy.inject_openlineage(task)
 
-    assert jars_of(task, layout) == ol_policy._macro_call("jar", "none", "a.jar,b.jar")
+    assert jars_of(task, layout) == ol_policy.parse._macro_call("jar", "none", "a.jar,b.jar")
 
 
 # ---------------------------------------------------------------------------
@@ -755,8 +755,8 @@ def test_inject_never_touches_network(layout: SimpleNamespace, monkeypatch: pyte
         """
         pytest.fail("сетевой вызов на парсе")
 
-    monkeypatch.setattr(ol_policy, "jar_available", _forbidden)
-    monkeypatch.setattr(ol_policy, "urlopen", _forbidden)
+    monkeypatch.setattr(ol_policy.probe, "jar_available", _forbidden)
+    monkeypatch.setattr(ol_policy.probe, "urlopen", _forbidden)
 
     ol_policy.inject_openlineage(layout.cls(dag=DummyDag()))
 
@@ -864,7 +864,7 @@ def test_probe_warns_when_resolver_raises(
     def _raise() -> list[str]:
         raise OSError("нет hdfs-site.xml")
 
-    monkeypatch.setattr(ol_policy, "resolve_webhdfs_urls", _raise)
+    monkeypatch.setattr(ol_policy.probe, "resolve_webhdfs_urls", _raise)
 
     assert ol_policy.jar_available(JAR, "/opt/ol.jar") is False
     assert any("не удалось определить эндпоинты" in message for message in warnings_of(caplog))
@@ -890,7 +890,7 @@ def test_probe_memo_expires(
     urls = requests_log(lambda url: HTTPError(url, 404, "Not Found", {}, None))
 
     assert ol_policy.jar_available(JAR, "/opt/ol.jar") is False
-    clock.now += ol_policy._MEMO_TTL_SEC + 1
+    clock.now += ol_policy.probe._MEMO_TTL_SEC + 1
     assert ol_policy.jar_available(JAR, "/opt/ol.jar") is False
     assert len(urls) == 2
 
@@ -902,7 +902,7 @@ def test_probe_returns_within_deadline(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Вызов возвращается не позже дедлайна, даже если висят все эндпоинты."""
-    monkeypatch.setattr(ol_policy, "_PROBE_DEADLINE_SEC", 0.2)
+    monkeypatch.setattr(ol_policy.probe, "_PROBE_DEADLINE_SEC", 0.2)
     endpoints([f"http://nn{index}:9870" for index in range(3)])
 
     def _hang(url: str) -> object:
@@ -926,7 +926,7 @@ def test_late_thread_does_not_overwrite_memo(
     requests_log: Callable[..., list[str]],
 ) -> None:
     """Поток, доехавший после дедлайна, не переписывает опубликованный ``False``."""
-    monkeypatch.setattr(ol_policy, "_PROBE_DEADLINE_SEC", 0.1)
+    monkeypatch.setattr(ol_policy.probe, "_PROBE_DEADLINE_SEC", 0.1)
     endpoints(["http://nn1:9870"])
 
     def _slow(url: str) -> object:
@@ -949,7 +949,7 @@ def test_probe_thread_is_daemon(monkeypatch: pytest.MonkeyPatch) -> None:
         seen.append(threading.current_thread().daemon)
         return []
 
-    monkeypatch.setattr(ol_policy, "resolve_webhdfs_urls", _resolve)
+    monkeypatch.setattr(ol_policy.probe, "resolve_webhdfs_urls", _resolve)
     ol_policy.jar_available(JAR, "/opt/ol.jar")
 
     assert seen == [True]
@@ -968,7 +968,7 @@ def test_cfg_returns_dict(variable: Callable[..., SimpleNamespace]) -> None:
         "openlineage_jar": "hdfs://namenode:9000/opt/ol.jar",
     }))
 
-    assert ol_policy._cfg() == {
+    assert ol_policy.variable._cfg() == {
         "enabled": True,
         "spark_conf": {"spark.extraListeners": "io.example.L", "spark.openlineage.transport.url": "http://marquez:5000", "spark.openlineage.namespace": "ns"},
         "openlineage_jar": "hdfs://namenode:9000/opt/ol.jar",
@@ -979,7 +979,7 @@ def test_cfg_rejects_empty_object(variable: Callable[..., SimpleNamespace], capl
     """Пустой JSON-объект — не годная форма Variable."""
     variable(raw="{}")
 
-    assert ol_policy._cfg() is None
+    assert ol_policy.variable._cfg() is None
     assert any("enabled (bool)" in message for message in warnings_of(caplog))
 
 
@@ -987,7 +987,7 @@ def test_cfg_rejects_old_shape(variable: Callable[..., SimpleNamespace], caplog:
     """Старый формат Variable ({enabled, url, namespace}) — не валиден."""
     variable(raw='{"enabled": true, "url": "http://marquez:5000", "namespace": "ns"}')
 
-    assert ol_policy._cfg() is None
+    assert ol_policy.variable._cfg() is None
     messages = warnings_of(caplog)
     assert any("spark_conf" in message for message in messages)
     assert any("openlineage_jar" in message for message in messages)
@@ -1014,7 +1014,7 @@ def test_cfg_returns_none_and_warns(
     """Каждая причина отказа даёт ``None`` и свой warning, а не пустой лог."""
     variable(raw=raw, error=error)
 
-    assert ol_policy._cfg() is None
+    assert ol_policy.variable._cfg() is None
     messages = warnings_of(caplog)
     assert messages
     assert any(marker in message for message in messages)
@@ -1024,8 +1024,8 @@ def test_cfg_is_memoized(variable: Callable[..., SimpleNamespace]) -> None:
     """Повторный вызов в метастор не ходит."""
     state = variable(raw='{"enabled": true}')
 
-    ol_policy._cfg()
-    ol_policy._cfg()
+    ol_policy.variable._cfg()
+    ol_policy.variable._cfg()
 
     assert state.calls == 1
 
@@ -1034,7 +1034,7 @@ def test_cfg_warns_about_auth(variable: Callable[..., SimpleNamespace], caplog: 
     """Ключ ``auth`` распознаётся, чтобы отказать явно (инвариант 5)."""
     variable(raw=json.dumps({"enabled": True, "spark_conf": {"spark.extraListeners": "io.example.L", "spark.openlineage.transport.url": "http://marquez:5000", "spark.openlineage.namespace": "ns"}, "openlineage_jar": "hdfs://n:9000/o.jar", "auth": {"token": "s3cr3t"}}))
 
-    ol_policy._cfg()
+    ol_policy.variable._cfg()
 
     assert any("auth" in message for message in warnings_of(caplog))
     assert not any("s3cr3t" in message for message in warnings_of(caplog))
@@ -1075,14 +1075,14 @@ def test_validate_cfg_runs_once_per_process(
         "openlineage_jar": "hdfs://n:9000/o.jar",
     }))
     calls = {"n": 0}
-    original = ol_policy._validate_cfg
+    original = ol_policy.variable._validate_cfg
 
     def _counted() -> object:
         calls["n"] += 1
         return original()
 
-    monkeypatch.setattr(ol_policy, "_validate_cfg", _counted)
-    monkeypatch.setattr(ol_policy, "jar_available", lambda jar_uri, path: True)
+    monkeypatch.setattr(ol_policy.variable, "_validate_cfg", _counted)
+    monkeypatch.setattr(ol_policy.probe, "jar_available", lambda jar_uri, path: True)
 
     ol_policy.ol_macro("listener")
     ol_policy.ol_macro("url")
@@ -1499,7 +1499,7 @@ def test_macro_jar_merges_with_dag_jars(
 ) -> None:
     """Канал-литерал: DAG-jar'ы первыми, наш последним."""
     _variable_full(variable)
-    monkeypatch.setattr(ol_policy, "jar_available", lambda jar_uri, path: True)
+    monkeypatch.setattr(ol_policy.probe, "jar_available", lambda jar_uri, path: True)
 
     assert ol_policy.ol_macro("jar", None, "a.jar") == "a.jar,hdfs://namenode:9000/o.jar"
 
@@ -1509,7 +1509,7 @@ def test_macro_jar_alone_when_dag_silent(
 ) -> None:
     """Канал '': только наш jar, без разделителя."""
     _variable_full(variable)
-    monkeypatch.setattr(ol_policy, "jar_available", lambda jar_uri, path: True)
+    monkeypatch.setattr(ol_policy.probe, "jar_available", lambda jar_uri, path: True)
 
     assert ol_policy.ol_macro("jar", None, "") == "hdfs://namenode:9000/o.jar"
 
@@ -1519,7 +1519,7 @@ def test_macro_jar_prefixes_comma_for_jinja_channel(
 ) -> None:
     """Канал None: наш jar дописывается через запятую."""
     _variable_full(variable)
-    monkeypatch.setattr(ol_policy, "jar_available", lambda jar_uri, path: True)
+    monkeypatch.setattr(ol_policy.probe, "jar_available", lambda jar_uri, path: True)
 
     assert ol_policy.ol_macro("jar", None, None) == ",hdfs://namenode:9000/o.jar"
 
@@ -1529,7 +1529,7 @@ def test_macro_jar_absent_keeps_dag_jars(
 ) -> None:
     """Probe не подтвердил jar — наш jar не подмешан, но DAG-jar на литеральном канале выживает."""
     _variable_full(variable)
-    monkeypatch.setattr(ol_policy, "jar_available", lambda jar_uri, path: False)
+    monkeypatch.setattr(ol_policy.probe, "jar_available", lambda jar_uri, path: False)
 
     assert ol_policy.ol_macro("jar", None, "a.jar") == "a.jar"
     assert any("HDFS" in message for message in warnings_of(caplog))
@@ -1540,7 +1540,7 @@ def test_macro_jar_absent_keeps_empty_dag_channel_empty(
 ) -> None:
     """Probe не подтвердил jar, канал '' (DAG молчал): по-прежнему пустая строка, не регрессия."""
     _variable_full(variable)
-    monkeypatch.setattr(ol_policy, "jar_available", lambda jar_uri, path: False)
+    monkeypatch.setattr(ol_policy.probe, "jar_available", lambda jar_uri, path: False)
 
     assert ol_policy.ol_macro("jar", None, "") == ""
 
@@ -1556,7 +1556,7 @@ def test_macro_refuses_every_field_when_jar_is_absent(
     нет» в «джоба не стартует».
     """
     _variable_full(variable)
-    monkeypatch.setattr(ol_policy, "jar_available", lambda jar_uri, path: False)
+    monkeypatch.setattr(ol_policy.probe, "jar_available", lambda jar_uri, path: False)
 
     assert ol_policy.ol_macro(field, None, "") == ""
 
@@ -1575,7 +1575,7 @@ def test_macro_jar_absent_keeps_dag_value_of_every_field(
 ) -> None:
     """Инвариант 18 при отказе зонда: собственное значение DAG'а переживает отказ во всех ветках."""
     _variable_full(variable)
-    monkeypatch.setattr(ol_policy, "jar_available", lambda jar_uri, path: False)
+    monkeypatch.setattr(ol_policy.probe, "jar_available", lambda jar_uri, path: False)
 
     assert ol_policy.ol_macro(field, None, dag_cur) == dag_cur
 
@@ -1585,7 +1585,7 @@ def test_macro_jar_absent_names_the_reason_once_per_render(
 ) -> None:
     """Причину отказа зонда называет только ветка ``jar``: четыре ветки — один warning."""
     _variable_full(variable)
-    monkeypatch.setattr(ol_policy, "jar_available", lambda jar_uri, path: False)
+    monkeypatch.setattr(ol_policy.probe, "jar_available", lambda jar_uri, path: False)
 
     for field in ("jar", "listener", "url", "namespace"):
         ol_policy.ol_macro(field, None, "")
@@ -1601,7 +1601,7 @@ def test_macro_jar_absent_warns_on_every_render(
 ) -> None:
     """§6: причины отказа jar'а не дедуплицируются — иначе воркер молчит следующие 300 с."""
     _variable_full(variable)
-    monkeypatch.setattr(ol_policy, "jar_available", lambda jar_uri, path: False)
+    monkeypatch.setattr(ol_policy.probe, "jar_available", lambda jar_uri, path: False)
 
     ol_policy.ol_macro("jar", None, "")
     ol_policy.ol_macro("jar", None, "")
@@ -1644,7 +1644,7 @@ def test_macro_jar_rejects_uri_without_scheme(
     def _forbidden(jar_uri: str, path: str) -> bool:
         pytest.fail("зонд не должен вызываться для URI без схемы")
 
-    monkeypatch.setattr(ol_policy, "jar_available", _forbidden)
+    monkeypatch.setattr(ol_policy.probe, "jar_available", _forbidden)
 
     assert ol_policy.ol_macro("jar", None, "") == ""
     assert any("без схемы" in message for message in warnings_of(caplog))
@@ -1683,7 +1683,7 @@ def test_resolve_jar_probes_with_uri_and_parsed_path(
         calls.append((jar_uri, path))
         return True
 
-    monkeypatch.setattr(ol_policy, "jar_available", _capture)
+    monkeypatch.setattr(ol_policy.probe, "jar_available", _capture)
 
     ol_policy.ol_macro("jar", None, "")
 
@@ -1706,7 +1706,7 @@ def test_macro_jar_probes_once_per_uri(
         probed.append(path)
         return True
 
-    monkeypatch.setattr(ol_policy, "_probe", _counting_probe)
+    monkeypatch.setattr(ol_policy.probe, "_probe", _counting_probe)
 
     first = ol_policy.ol_macro("jar", None, "")
     second = ol_policy.ol_macro("jar", None, "")
@@ -1728,7 +1728,7 @@ def spark_operator(monkeypatch: pytest.MonkeyPatch, layout: SimpleNamespace) -> 
     :param layout: раскладка атрибутов.
     :return: класс дубля оператора.
     """
-    monkeypatch.setattr(ol_policy, "_spark_submit_operator", lambda: layout.cls)
+    monkeypatch.setattr(ol_policy.operator, "_spark_submit_operator", lambda: layout.cls)
     return layout.cls
 
 
@@ -1802,7 +1802,7 @@ def test_spark_task_is_injected_through_apply_policy(
 
 def test_policy_survives_missing_provider(layout: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
     """Провайдера нет — политике нечего делать, и она об этом не падает."""
-    monkeypatch.setattr(ol_policy, "_spark_submit_operator", lambda: None)
+    monkeypatch.setattr(ol_policy.operator, "_spark_submit_operator", lambda: None)
 
     ol_policy.apply_policy(make_task(layout))
 
@@ -1881,7 +1881,7 @@ def test_unexpected_error_is_swallowed_and_logged(
     def _boom(task: object) -> None:
         raise RuntimeError("неожиданно")
 
-    monkeypatch.setattr(ol_policy, "inject_openlineage", _boom)
+    monkeypatch.setattr(ol_policy.parse, "inject_openlineage", _boom)
 
     ol_policy.apply_policy(make_task(layout))
 
@@ -1923,7 +1923,7 @@ def test_passthrough_exceptions_are_reraised(
     def _boom(task: object) -> None:
         raise exception_class("наружу")
 
-    monkeypatch.setattr(ol_policy, "inject_openlineage", _boom)
+    monkeypatch.setattr(ol_policy.parse, "inject_openlineage", _boom)
 
     with pytest.raises(exception_class):
         ol_policy.apply_policy(make_task(layout))
@@ -2011,7 +2011,7 @@ def test_template_renders_in_sandboxed_environment(
 
     listener = "io.openlineage.spark.agent.OpenLineageSparkListener"
     monkeypatch.setattr(
-        ol_policy,
+        ol_policy.variable,
         "_cfg",
         lambda: {
             "enabled": True,
@@ -2027,9 +2027,9 @@ def test_template_renders_in_sandboxed_environment(
     dag.user_defined_macros = {ol_policy.MACRO: ol_policy.ol_macro}
     env = dag.get_template_env()
     template = {
-        "spark.extraListeners": ol_policy._macro_call("listener", "none", ""),
-        "spark.openlineage.transport.url": ol_policy._macro_call("url", "none", ""),
-        "spark.openlineage.namespace": ol_policy._macro_call("namespace", "none", ""),
+        "spark.extraListeners": ol_policy.parse._macro_call("listener", "none", ""),
+        "spark.openlineage.transport.url": ol_policy.parse._macro_call("url", "none", ""),
+        "spark.openlineage.namespace": ol_policy.parse._macro_call("namespace", "none", ""),
     }
 
     rendered = {key: env.from_string(value).render() for key, value in template.items()}
@@ -2072,8 +2072,8 @@ def test_seeded_value_is_accepted_by_the_policy(variable: Callable[..., SimpleNa
     """
     variable(raw=SEEDED_VARIABLE)
 
-    assert ol_policy._cfg() == json.loads(SEEDED_VARIABLE)
-    assert ol_policy._validate_cfg() is not None
+    assert ol_policy.variable._cfg() == json.loads(SEEDED_VARIABLE)
+    assert ol_policy.variable._validate_cfg() is not None
 
 
 def test_double_encoded_value_is_not_an_object() -> None:
@@ -2138,24 +2138,24 @@ def test_emit_without_dag_value_returns_value_as_is() -> None:
         """
         raise AssertionError("на пустом канале мердж не вызывается")
 
-    assert ol_policy._emit("io.ol.L", "", _forbidden, "spark.extraListeners") == "io.ol.L"
+    assert ol_policy.render._emit("io.ol.L", "", _forbidden, "spark.extraListeners") == "io.ol.L"
 
 
 def test_emit_with_literal_merges_and_dedups() -> None:
     """Канал-литерал: полный мердж с дедупом, DAG-значения первыми."""
-    merged = ol_policy._emit("io.ol.L", "com.example.A,io.ol.L", ol_policy.merge_listeners, "spark.extraListeners")
+    merged = ol_policy.render._emit("io.ol.L", "com.example.A,io.ol.L", ol_policy.merge_listeners, "spark.extraListeners")
 
     assert merged == "com.example.A,io.ol.L"
 
 
 def test_emit_with_none_channel_prefixes_comma() -> None:
     """Канал None: слева уже стоит текст DAG'а — дописываем через запятую."""
-    assert ol_policy._emit("io.ol.L", None, ol_policy.merge_listeners, "spark.extraListeners") == ",io.ol.L"
+    assert ol_policy.render._emit("io.ol.L", None, ol_policy.merge_listeners, "spark.extraListeners") == ",io.ol.L"
 
 
 def test_emit_uses_the_merge_it_was_given() -> None:
     """Ветка jar использует свой мердж — сплит и дедуп по тем же правилам."""
-    merged = ol_policy._emit("hdfs://n:9000/o.jar", "a.jar", ol_policy._merge_jars_pair, "spark.jars")
+    merged = ol_policy.render._emit("hdfs://n:9000/o.jar", "a.jar", ol_policy.render._merge_jars_pair, "spark.jars")
 
     assert merged == "a.jar,hdfs://n:9000/o.jar"
 
@@ -2172,7 +2172,7 @@ def test_full_cycle_renders_expected_command_values(
 ) -> None:
     """Парс собрал строки, живой Jinja их отрендерил — значения на месте, запятых лишних нет."""
     _variable_full(variable)
-    monkeypatch.setattr(ol_policy, "jar_available", lambda jar_uri, path: True)
+    monkeypatch.setattr(ol_policy.probe, "jar_available", lambda jar_uri, path: True)
     dag = airflow_dag.DAG(dag_id="render", schedule=None, start_date=None)
     task = PublicLayoutOperator(dag=dag, jars="a.jar", conf={"spark.extraListeners": "com.example.A"})
 
@@ -2220,7 +2220,7 @@ def test_full_cycle_injects_nothing_when_jar_is_absent(
     роняло драйвер, — класс листенера и URI jar'а.
     """
     _variable_full(variable)
-    monkeypatch.setattr(ol_policy, "jar_available", lambda jar_uri, path: False)
+    monkeypatch.setattr(ol_policy.probe, "jar_available", lambda jar_uri, path: False)
     dag = airflow_dag.DAG(dag_id="render_no_jar", schedule=None, start_date=None)
     task = PublicLayoutOperator(dag=dag)
 
@@ -2242,7 +2242,7 @@ def test_full_cycle_keeps_dag_values_when_jar_is_absent(
 ) -> None:
     """Инвариант 18 сквозным прогоном: отказ зонда не стирает listener и jar'ы самого DAG'а."""
     _variable_full(variable)
-    monkeypatch.setattr(ol_policy, "jar_available", lambda jar_uri, path: False)
+    monkeypatch.setattr(ol_policy.probe, "jar_available", lambda jar_uri, path: False)
     dag = airflow_dag.DAG(dag_id="render_no_jar_dag_values", schedule=None, start_date=None)
     task = PublicLayoutOperator(dag=dag, jars="a.jar", conf={"spark.extraListeners": "com.example.A"})
 

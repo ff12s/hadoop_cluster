@@ -1,0 +1,146 @@
+"""Совместимость с двумя раскладками ``SparkSubmitOperator`` и тумблер из ``params``.
+
+Обслуживает парс-фазу: это всё, что парсу нужно знать про объект таски, и здесь не
+читается ничего, кроме самого объекта. Провайдер 4.1.1 держит conf и jars
+приватными, 4.10.0 — публичными, поэтому имена атрибутов резолвятся, а не
+зашиваются. Здесь же лесенка форса ``task.params`` → ``dag.params`` и список
+исключений, которые политика обязана пропускать наружу.
+"""
+
+from __future__ import annotations
+
+import importlib
+from types import SimpleNamespace
+from typing import Tuple, Type
+
+from . import utils
+from .logger import warn_once
+
+# Кортеж собирается лениво, при первом вызове, а не на уровне модуля: этот
+# модуль импортируется из airflow_local_settings, который settings.initialize()
+# подключает раньше configure_orm() — импорт airflow.exceptions на этом этапе
+# забрал бы его из ещё не до конца инициализированного пакета airflow.
+_PASSTHROUGH_NAMES = ("AirflowTaskTimeout", "AirflowClusterPolicyViolation", "AirflowClusterPolicySkipDag")
+_passthrough_cache: tuple[type[BaseException], ...] | None = None
+
+_ATTR_CANDIDATES: dict[str, tuple[str, ...]] = {"conf": ("conf", "_conf"), "jars": ("jars", "_jars")}
+
+
+def passthrough_exceptions() -> Tuple[Type[BaseException], ...]:
+    """Классы исключений, которые политика обязана пропускать наружу.
+
+    Собирается поимённо, каждый класс своим ``try/except``: в 2.6.3 нет
+    ``AirflowClusterPolicySkipDag``, и общий ``import`` провалился бы целиком,
+    молча выключив проброс ``AirflowTaskTimeout``.
+
+    :return: кортеж классов; пустой, если Airflow недоступен.
+    """
+    global _passthrough_cache
+    if _passthrough_cache is None:
+        collected: tuple[type[BaseException], ...] = ()
+        for name in _PASSTHROUGH_NAMES:
+            try:
+                collected += (getattr(importlib.import_module("airflow.exceptions"), name),)
+            except (ImportError, AttributeError):
+                continue
+        _passthrough_cache = collected
+
+    return _passthrough_cache
+
+
+def operator_attrs(task: object) -> SimpleNamespace | None:
+    """Имена атрибутов conf и jars у этого оператора.
+
+    Имя обязано одновременно быть в ``template_fields`` (значит, будет
+    отрендерено) и существовать на объекте (значит, его читает hook). В
+    провайдере 4.1.1 атрибуты приватные, в 4.10.0 — публичные, поэтому имя
+    резолвится, а не зашивается.
+
+    :param task: таска Airflow.
+    :return: пространство имён с полями ``conf`` и ``jars``, либо None,
+        если раскладка незнакома.
+    """
+    fields = set(getattr(task, "template_fields", ()) or ())
+    resolved: dict[str, str] = {}
+    for role, candidates in _ATTR_CANDIDATES.items():
+        for name in candidates:
+            if name in fields and hasattr(task, name):
+                resolved[role] = name
+                break
+        else:
+            return None
+    return SimpleNamespace(**resolved)
+
+
+def _spark_submit_operator() -> type | None:
+    """Класс ``SparkSubmitOperator`` установленного провайдера.
+
+    :return: класс оператора либо None, если провайдера в среде нет.
+    """
+    try:
+        from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
+    except Exception:
+        return None
+    return SparkSubmitOperator
+
+
+def _looks_like_spark_submit(task: object, operator_cls: type) -> bool:
+    """Похожа ли таска на ``SparkSubmitOperator``, не будучи его экземпляром.
+
+    Так распознаются динамически размапленные таски: их conf и jars лежат в
+    ``partial_kwargs``, адресация через ``operator_attrs`` на них не работает.
+
+    :param task: таска Airflow.
+    :param operator_cls: класс оператора установленного провайдера.
+    :return: True, если ``operator_class`` или ``task_type`` указывают на оператор.
+    """
+    operator_class = getattr(task, "operator_class", None)
+    if operator_class is operator_cls:
+        return True
+    name = operator_class if isinstance(operator_class, str) else getattr(operator_class, "__name__", "")
+    return name == operator_cls.__name__ or getattr(task, "task_type", None) == operator_cls.__name__
+
+
+def _level_forced(owner: object, level: str, dag_id: str, task_id: str) -> bool | None:
+    """Значение тумблера одного уровня лесенки ``params``.
+
+    Ключа нет или он равен None — уровень не высказался, и это нормальное
+    состояние: warning'а нет. Негодное значение пишет warning и трактуется как
+    отсутствующее.
+
+    :param owner: таска либо DAG, чьи ``params`` читаются.
+    :param level: имя уровня для сообщения ("таски" либо "DAG'а").
+    :param dag_id: идентификатор DAG'а для ключа дедупликации.
+    :param task_id: идентификатор таски для ключа дедупликации.
+    :return: True, False либо None, если уровень не высказался.
+    """
+    params = getattr(owner, "params", None)
+    if params is None:
+        return None
+    try:
+        if "openlineage" not in params:
+            return None
+        value = params["openlineage"]
+    except Exception:
+        warn_once(("unreadable-toggle", dag_id, task_id), "OpenLineage: не удалось прочитать params['openlineage'] — уровень %s игнорируется (%s.%s)", level, dag_id, task_id)
+        return None
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    warn_once(("bad-toggle", dag_id, task_id), "OpenLineage: params['openlineage'] не является булевым — уровень %s игнорируется (%s.%s)", level, dag_id, task_id)
+    return None
+
+
+def lineage_forced(task: object) -> bool | None:
+    """Форс лайниджа из DAG'а: ``task.params``, затем ``dag.params``.
+
+    :param task: таска Airflow.
+    :return: True — форс-включение, False — форс-выключение, None — решение
+        остаётся за Variable.
+    """
+    dag_id, task_id = utils.dag_and_task_ids(task)
+    forced = _level_forced(task, "таски", dag_id, task_id)
+    if forced is not None:
+        return forced
+    return _level_forced(utils.task_dag(task), "DAG'а", dag_id, task_id)
