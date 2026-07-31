@@ -35,7 +35,7 @@
 - Produces: `probe._spnego_header(endpoint: str) -> str | None`; ветка 401 в `probe._query_endpoint` (сигнатура не меняется: `(endpoint: str, path: str) -> _Outcome`); повторный запрос строится как `urllib.request.Request(url, headers={"Authorization": <header>})` и уходит в тот же модульный `urlopen`.
 - Consumes: существующие `_Outcome`, `warn_once`, `ENDPOINT_TIMEOUT_SEC`, фикстуры `endpoints`, `requests_log`.
 
-- [ ] **Step 1: Написать падающие тесты**
+- [x] **Step 1: Написать падающие тесты**
 
 В `test_ol_policy.py`, рядом с остальными probe-тестами (используй существующие фикстуры `endpoints`, `requests_log`; `HTTPError` и `Request` импортируй в шапке файла: `from urllib.error import HTTPError`, `from urllib.request import Request` — HTTPError там уже есть):
 
@@ -114,12 +114,12 @@ def test_probe_401_then_404_is_absent(
 
 В шапку файла добавить недостающие импорты: `import base64`, `import io`, `import sys`, `import types` (какие-то уже есть — проверить).
 
-- [ ] **Step 2: Прогнать — убедиться, что падают**
+- [x] **Step 2: Прогнать — убедиться, что падают**
 
 Run: `python -m pytest airflow/config/tests/test_ol_policy.py -q -k "401"`
 Expected: FAIL (исход "error" вместо "found"/"absent", warning'а нет).
 
-- [ ] **Step 3: Реализация в probe.py**
+- [x] **Step 3: Реализация в probe.py**
 
 Докстроку модуля дополнить строкой: «Аутентификация — только SPNEGO/Negotiate по challenge 401; делегационные токены не поддерживаются.» Добавить `import base64` и `from urllib.request import Request, urlopen` (Request — новый).
 
@@ -178,12 +178,12 @@ def _query_with_auth(endpoint: str, url: str) -> _Outcome:
             return _query_with_auth(endpoint, url)
 ```
 
-- [ ] **Step 4: Прогнать тесты**
+- [x] **Step 4: Прогнать тесты**
 
 Run: `python -m pytest airflow/config/tests -q`
 Expected: PASS (все, включая старые probe-тесты).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add airflow/config/ol_policy/probe.py airflow/config/tests/test_ol_policy.py
@@ -203,7 +203,7 @@ git commit -m "feat(ol_policy): SPNEGO fallback on WebHDFS 401 in the jar probe"
 - Produces: `probe._probe(path: str) -> Literal["found", "absent", "down"]` (было `-> bool`); `probe._jar_memo: dict[str, tuple[bool, float, float]]` — (available, stamped, ttl); константы `probe._MEMO_ERROR_TTL_SEC = 30.0`, `probe._RETRY_PAUSE_SEC = 0.5`; модульный `probe._sleep = time.sleep` (для monkeypatch в тестах).
 - Consumes: `_query_endpoint` из Task 1; фикстуры `endpoints`, `requests_log`, `clock`.
 
-- [ ] **Step 1: Написать падающие тесты**
+- [x] **Step 1: Написать падающие тесты**
 
 ```python
 def test_probe_retries_endpoints_once_on_transient_errors(
@@ -279,12 +279,12 @@ def test_error_memo_expires_faster_than_found(
 
 Точную сигнатуру `clock` посмотреть в test_ol_policy.py (фикстура уже есть; если у неё нет метода `advance` — использовать её реальный интерфейс, тесты `test_probe_memo_expires` показывают как).
 
-- [ ] **Step 2: Прогнать — падают**
+- [x] **Step 2: Прогнать — падают**
 
 Run: `python -m pytest airflow/config/tests/test_ol_policy.py -q -k "retries or terminal or two_passes or expires_faster"`
 Expected: FAIL.
 
-- [ ] **Step 3: Реализация**
+- [x] **Step 3: Реализация**
 
 В `probe.py`:
 
@@ -366,12 +366,12 @@ def _probe(path: str) -> _ProbeOutcome:
 
 Существующие тесты `test_probe_memoizes_by_jar_uri` / `test_probe_memo_expires` / `test_late_thread_does_not_overwrite_memo` / `test_probe_returns_within_deadline` могли읽 читать 2-кортеж из `_jar_memo` или считать число вызовов — адаптировать под 3-кортеж и второй проход (например, задать `_sleep = lambda s: None` через monkeypatch там, где считаются вызовы).
 
-- [ ] **Step 4: Прогнать всё**
+- [x] **Step 4: Прогнать всё**
 
 Run: `python -m pytest airflow/config/tests -q`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add airflow/config/ol_policy/probe.py airflow/config/tests/test_ol_policy.py
@@ -392,7 +392,7 @@ git commit -m "feat(ol_policy): probe retry pass and outcome-based memo TTL"
 - Produces: `variable._cfg() -> dict[str, object] | None` и `variable._validate_cfg() -> Config | None` — сигнатуры прежние, внутри TTL-мемо (`variable._TTL_SEC = 300.0`); `variable.reset()`, `probe.reset()`, `logger.reset()`, `operator.reset()` — все `() -> None`; `ol_policy.reset_state()` зовёт только их.
 - Consumes: `utils.now` (мемо меряет время им же, как зонд — фикстура `clock` продолжает работать).
 
-- [ ] **Step 1: Написать падающие тесты**
+- [x] **Step 1: Написать падающие тесты**
 
 ```python
 def test_cfg_memo_expires_by_ttl(
@@ -434,12 +434,12 @@ def test_reset_state_calls_module_resets(monkeypatch: pytest.MonkeyPatch) -> Non
 
 Проверить, каким временем меряет `clock`: `variable`-мемо обязан использовать `utils.now` через модульный реэкспорт `variable._now = utils.now` (тот же приём, что в probe), чтобы фикстура попадала.
 
-- [ ] **Step 2: Прогнать — падают**
+- [x] **Step 2: Прогнать — падают**
 
 Run: `python -m pytest airflow/config/tests/test_ol_policy.py -q -k "memo_expires_by_ttl or follows_cfg_ttl or module_resets"`
 Expected: FAIL.
 
-- [ ] **Step 3: Реализация**
+- [x] **Step 3: Реализация**
 
 `variable.py`: убрать `functools.lru_cache` (и import functools, если больше не нужен). Модульное состояние и TTL:
 
@@ -499,12 +499,12 @@ def reset_state() -> None:
 
 Существующие тесты `test_cfg_is_memoized`, `test_validate_cfg_runs_once_per_process` — проверить, что проходят (семантика «один раз за процесс» превращается в «один раз за TTL»; имена/докстроки тестов поправить, если врут).
 
-- [ ] **Step 4: Прогнать всё**
+- [x] **Step 4: Прогнать всё**
 
 Run: `python -m pytest airflow/config/tests -q`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add airflow/config/ol_policy airflow/config/tests/test_ol_policy.py
@@ -524,7 +524,7 @@ git commit -m "refactor(ol_policy): TTL memo for the Variable config and per-mod
 - Consumes: `operator._spark_submit_operator()`, `operator.operator_attrs(task) -> OperatorAttrs | None`, `operator.lineage_forced(task) -> bool | None`, `variable._cfg()`, `variable._validate_cfg() -> Config | None` (поля `listener`, `url`, `namespace`, `jar_uri`), `probe.jar_path(jar_uri) -> str | None`, `probe.jar_available(jar_uri, path) -> bool`, `utils.merge_csv`, `utils.dag_and_task_ids`, `logger.warn_once`, `logger.logger`.
 - Задача самодостаточна: parse.py ещё макро-версии, колбэк тестируется прямым вызовом.
 
-- [ ] **Step 1: Написать падающие тесты**
+- [x] **Step 1: Написать падающие тесты**
 
 Хелпер и тесты (фикстуры `layout`, `variable`, `jar_ok`, `probe_forbidden`, `warnings_of` — существующие; `SEEDED_VALUE`-подобный валидный JSON собрать литералом как в `test_macro_returns_values` — посмотреть точную форму там):
 
@@ -635,12 +635,12 @@ def test_callback_ignores_context_without_task() -> None:
 
 `test_callback_force_on_beats_disabled` — по образцу существующего `test_force_enables_without_enabled_flag`, но через `_run_callback` и `params={"openlineage": True}` у таски.
 
-- [ ] **Step 2: Прогнать — падают**
+- [x] **Step 2: Прогнать — падают**
 
 Run: `python -m pytest airflow/config/tests/test_ol_policy.py -q -k "callback"`
 Expected: FAIL (модуля callback нет).
 
-- [ ] **Step 3: Реализация callback.py**
+- [x] **Step 3: Реализация callback.py**
 
 ```python
 """Колбэк-фаза: Airflow зовёт ``ol_execute_callback`` на воркере до ``execute()``.
@@ -782,12 +782,12 @@ def _write(task: object, attrs: operator.OperatorAttrs, config: variable.Config)
 
 `Mapping` импортировать из `typing` (py3.8-совместимо при runtime-использовании в `isinstance` — для isinstance взять `collections.abc.Mapping`; в аннотации можно `typing.Mapping`). Внимание: `isinstance(context, Mapping)` требует `collections.abc.Mapping` — импортировать оба или только abc-вариант и аннотировать им.
 
-- [ ] **Step 4: Прогнать всё**
+- [x] **Step 4: Прогнать всё**
 
 Run: `python -m pytest airflow/config/tests -q`
 Expected: PASS (callback-тесты зелёные, старые не тронуты — parse ещё макро-версии).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add airflow/config/ol_policy/callback.py airflow/config/tests/test_ol_policy.py
@@ -809,7 +809,7 @@ git commit -m "feat(ol_policy): runtime injection module callback.py"
 - Produces: `parse.inject_openlineage(task: object) -> None` — гейты + append (имя прежнее, вызывается из `apply_policy` как раньше); экспорт пакета: `ol_execute_callback` (вместо `ol_macro`, `MACRO`).
 - Consumes: `callback.ol_execute_callback` (Task 4), `operator.*`, `utils.dag_and_task_ids`.
 
-- [ ] **Step 1: Написать падающие парс-тесты**
+- [x] **Step 1: Написать падающие парс-тесты**
 
 ```python
 def test_policy_appends_callback(layout: SimpleNamespace, probe_forbidden: None) -> None:
@@ -873,12 +873,12 @@ def test_full_cycle_parse_then_callback(
     assert getattr(task, layout.jars) == "hdfs:///user/app.jar,hdfs:///jars/openlineage-spark.jar"
 ```
 
-- [ ] **Step 2: Прогнать — падают**
+- [x] **Step 2: Прогнать — падают**
 
 Run: `python -m pytest airflow/config/tests/test_ol_policy.py -q -k "appends or idempotent or author_callback or appends_nothing or does_not_touch_dag or full_cycle_parse"`
 Expected: FAIL.
 
-- [ ] **Step 3: conftest — дублям операторов добавить колбэк-атрибут**
+- [x] **Step 3: conftest — дублям операторов добавить колбэк-атрибут**
 
 В `PrivateLayoutOperator.__init__` и `PublicLayoutOperator.__init__` добавить строку:
 
@@ -886,7 +886,7 @@ Expected: FAIL.
         self.on_execute_callback: object | None = None
 ```
 
-- [ ] **Step 4: Переписать parse.py**
+- [x] **Step 4: Переписать parse.py**
 
 Новый модуль целиком (докстроку модуля переписать: «Парс-фаза: гейты и идемпотентная дозапись колбэка; ноль обращений к Variable, метастору и HDFS — резолв уезжает в callback»):
 
@@ -923,7 +923,7 @@ def inject_openlineage(task: object) -> None:
 
 Удалить: `MACRO`, `_UNSAFE_FOR_LITERAL`, `_dag_channel`, `_macro_call`, гейт «таска без DAG», мутацию `user_defined_macros`, `Literal`-импорт, если не нужен.
 
-- [ ] **Step 5: Удалить render.py, обновить __init__.py**
+- [x] **Step 5: Удалить render.py, обновить __init__.py**
 
 ```bash
 git rm airflow/config/ol_policy/render.py
@@ -931,7 +931,7 @@ git rm airflow/config/ol_policy/render.py
 
 `__init__.py`: из импортов и `__all__` убрать `render`, `ol_macro`, `MACRO`; добавить `callback` в список импортируемых модулей и `ol_execute_callback` в реэкспорт/`__all__`. Докстроку пакета поправить: фаза «render» → «callback», упоминание макроса заменить описанием `on_execute_callback`.
 
-- [ ] **Step 6: Вычистить мёртвые тесты**
+- [x] **Step 6: Вычистить мёртвые тесты**
 
 Удалить из `test_ol_policy.py` тесты макро-механизма (они теперь красные или тестируют несуществующее): все `test_dag_channel_*`, `test_macro_call_*`, `test_macro_*` (вся секция рендера, включая `test_macro_returns_values` … `test_macro_jar_probes_once_per_uri`), `test_taken_macro_name_blocks_injection`, `test_macro_is_added_without_dropping_others`, `test_two_tasks_of_one_dag_are_both_injected` (переписать на append-семантику: две таски одного DAG'а → у каждой свой колбэк), `test_task_without_dag_warns` (гейт удалён — тест удалить; таска без DAG теперь спокойно получает колбэк), `test_inject_writes_macro_calls_not_values`, `test_inject_puts_jar_merge_into_the_jars_attribute`, `test_inject_keeps_dag_listener_as_literal`, `test_inject_leaves_jinja_dag_value_in_the_string`, `test_emit_*`, `test_merge_listeners_prefixes*`/`test_macro_listener_prefixes*`, `test_template_renders_in_sandboxed_environment`, `test_full_cycle_renders_expected_command_values`, `test_full_cycle_leaves_no_trailing_comma_when_lineage_is_off`, `test_full_cycle_injects_nothing_when_jar_is_absent` и `test_full_cycle_keeps_dag_values_when_jar_is_absent` (заменяются callback-тестами отказов из Task 4 + новым `test_full_cycle_parse_then_callback`).
 
@@ -939,12 +939,12 @@ git rm airflow/config/ol_policy/render.py
 
 `test_failure_reasons_are_pairwise_distinct` — обновить набор причин (ушли «macro-taken», «no-dag», «jinja-channel»; пришли «kerberos-unavailable», «callback-unexpected»).
 
-- [ ] **Step 7: Прогнать всё**
+- [x] **Step 7: Прогнать всё**
 
 Run: `python -m pytest airflow/config/tests -q`
 Expected: PASS, ноль упоминаний MACRO: `grep -rn "MACRO\|ol_macro\|user_defined_macros" airflow/config/ol_policy/` пуст (в тестах допустимо только в конtestе DummyDag-атрибута).
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add -A airflow/config
@@ -962,7 +962,7 @@ git commit -m "feat(ol_policy): switch injection from Jinja macro to on_execute_
 
 **Interfaces:** нет кода.
 
-- [ ] **Step 1: CHANGELOG**
+- [x] **Step 1: CHANGELOG**
 
 Добавить запись в раздел Unreleased (или создать по образцу соседних):
 
@@ -986,16 +986,16 @@ git commit -m "feat(ol_policy): switch injection from Jinja macro to on_execute_
 
 Формулировки сверить с фактическим поведением после Task 5.
 
-- [ ] **Step 2: README**
+- [x] **Step 2: README**
 
 В разделе про OpenLineage-инъекцию Airflow (если он есть) заменить описание макро-механизма на колбэк + перенести два ограничения из CHANGELOG. Если раздела нет — не создавать, ограничиться CHANGELOG.
 
-- [ ] **Step 3: Финальный прогон и чистовая проверка**
+- [x] **Step 3: Финальный прогон и чистовая проверка**
 
 Run: `python -m pytest airflow/config/tests -q` — PASS.
 Run: `git status --porcelain` — только ожидаемые файлы.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add CHANGELOG.md README.md docs/superpowers/plans/2026-07-31-ol-callback-injection.md
