@@ -225,6 +225,46 @@ def install_airflow_exceptions(monkeypatch: pytest.MonkeyPatch, names: tuple[str
 
 
 # ---------------------------------------------------------------------------
+# Выбор канала для DAG-значения и сборка вызова макроса
+# ---------------------------------------------------------------------------
+
+
+def test_dag_channel_empty_value() -> None:
+    """Пусто, None и пробелы — DAG молчал: префикса нет, канал ''."""
+    assert ol_policy._dag_channel(None) == ("", "")
+    assert ol_policy._dag_channel("") == ("", "")
+    assert ol_policy._dag_channel("   ") == ("", "")
+
+
+def test_dag_channel_safe_literal() -> None:
+    """Безопасное значение уходит литералом, префикса нет."""
+    assert ol_policy._dag_channel("a.jar,b.jar") == ("", "a.jar,b.jar")
+
+
+@pytest.mark.parametrize("value", ["{{ params.jars }}", "{% if x %}a.jar{% endif %}", "it's.jar", 'say"hi".jar'])
+def test_dag_channel_unsafe_value_stays_in_the_string(value: str) -> None:
+    """Jinja и кавычки нельзя вложить в текст вызова макроса — значение остаётся слева."""
+    assert ol_policy._dag_channel(value) == (value, None)
+
+
+def test_macro_call_renders_literal() -> None:
+    """Литерал попадает в вызов в одинарных кавычках."""
+    call = ol_policy._macro_call("listener", "none", "com.example.A")
+
+    assert call == "{{ __openlineage_v1('listener', none, 'com.example.A') }}"
+
+
+def test_macro_call_renders_none_channel() -> None:
+    """Канал None рендерится как Jinja-литерал none, а не как строка 'None'."""
+    assert ol_policy._macro_call("jar", "true", None) == "{{ __openlineage_v1('jar', true, none) }}"
+
+
+def test_macro_call_renders_empty_channel() -> None:
+    """Канал '' рендерится пустой строкой-литералом."""
+    assert ol_policy._macro_call("url", "none", "") == "{{ __openlineage_v1('url', none, '') }}"
+
+
+# ---------------------------------------------------------------------------
 # Раскладка атрибутов оператора (инвариант 8)
 # ---------------------------------------------------------------------------
 

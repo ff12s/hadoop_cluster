@@ -39,6 +39,10 @@ from .logger import logger as _logger
 MACRO = "__openlineage_v1"
 VARIABLE = "openlineage_config"
 
+# Значение с этими фрагментами нельзя вложить литералом в текст вызова макроса:
+# Jinja порвётся на вложенных скобках, кавычка — на самой кавычке.
+_UNSAFE_FOR_LITERAL = ("{{", "{%", "'", '"')
+
 # Ограничители зонда (§6.1): дедлайн на весь перебор, таймаут одного эндпоинта,
 # TTL мемо. Модульные, потому что тесты подменяют их monkeypatch'ем.
 _PROBE_DEADLINE_SEC = 5.0
@@ -613,6 +617,36 @@ def jar_available(jar_uri: str, path: str) -> bool:
 
     _jar_memo[jar_uri] = (available, _now())
     return available
+
+
+def _dag_channel(value: object) -> tuple[str, str | None]:
+    """Выбирает канал, которым DAG-значение доедет до макроса.
+
+    Каналов три, и решение принимает парс — единственный, кто видит исходное
+    значение: на рендере прочитать его нечем.
+
+    :param value: значение ключа conf либо атрибута оператора, как его задал DAG.
+    :return: пара ``(prefix, dag_cur)``. ``prefix`` ставится в строку перед вызовом
+        макроса, ``dag_cur`` уходит третьим аргументом макроса.
+    """
+    text = value.strip() if isinstance(value, str) else ""
+    if not text:
+        return "", ""
+    if any(marker in text for marker in _UNSAFE_FOR_LITERAL):
+        return text, None
+    return "", text
+
+
+def _macro_call(field: str, forced: str, dag_cur: str | None) -> str:
+    """Собирает текст вызова макроса для подстановки в conf.
+
+    :param field: имя ветки макроса.
+    :param forced: ``"true"`` либо ``"none"`` — Jinja-литерал форса.
+    :param dag_cur: канал DAG-значения из ``_dag_channel``.
+    :return: строка вида ``{{ __openlineage_v1('field', none, 'value') }}``.
+    """
+    literal = "none" if dag_cur is None else f"'{dag_cur}'"
+    return f"{{{{ {MACRO}('{field}', {forced}, {literal}) }}}}"
 
 
 def inject_openlineage(task: object) -> None:
