@@ -26,6 +26,7 @@ import pytest
 
 import ol_policy
 from conftest import DummyDag, PublicLayoutOperator, warnings_of
+from ol_policy import callback
 
 JAR = "hdfs://namenode:9000/opt/openlineage/openlineage-spark_2.13-1.46.0.jar"
 FOREIGN_LISTENER = "com.example.OtherListener"
@@ -2501,5 +2502,158 @@ def test_failure_reasons_are_pairwise_distinct(
 
     assert len(collected) == len(set(collected)), f"неразличимые тексты: {collected}"
     assert len(collected) == len(scenarios)
+
+
+# ---------------------------------------------------------------------------
+# Колбэк-фаза: ol_execute_callback / _inject / _write (Task 4)
+# ---------------------------------------------------------------------------
+
+VALID_VARIABLE = json.dumps({
+    "enabled": True,
+    "spark_conf": {
+        "spark.extraListeners": "io.openlineage.spark.agent.OpenLineageSparkListener",
+        "spark.openlineage.transport.url": "http://marquez:5000",
+        "spark.openlineage.namespace": "stand",
+    },
+    "openlineage_jar": "hdfs:///jars/openlineage-spark.jar",
+})
+
+
+def _run_callback(task: object) -> None:
+    """Зовёт колбэк политики так, как его зовёт Airflow: контекстом с таской.
+
+    :param task: таска, которую нужно передать колбэку под ключом ``task``.
+    :return: None.
+    """
+    callback.ol_execute_callback({"task": task})
+
+
+def test_callback_injects_all_keys_on_success(
+    layout: SimpleNamespace,
+    spark_operator: type,
+    variable: Callable[..., SimpleNamespace],
+    jar_ok: list[tuple[str, str]],
+) -> None:
+    """Успех: пять ключей conf + jar в атрибуте jars, DAG-значения смерджены."""
+    variable(raw=VALID_VARIABLE)
+    task = layout.cls(dag=DummyDag(), conf={"spark.executor.cores": "2"}, jars="hdfs:///user/app.jar")
+
+    _run_callback(task)
+
+    conf = getattr(task, layout.conf)
+    assert conf["spark.extraListeners"] == "io.openlineage.spark.agent.OpenLineageSparkListener"
+    assert conf["spark.openlineage.transport.type"] == "http"
+    assert conf["spark.openlineage.transport.url"] == "http://marquez:5000"
+    assert conf["spark.openlineage.namespace"] == "stand"
+    assert conf["spark.openlineage.columnLineage.datasetLineageEnabled"] == "true"
+    assert conf["spark.executor.cores"] == "2"
+    assert getattr(task, layout.jars) == "hdfs:///user/app.jar,hdfs:///jars/openlineage-spark.jar"
+
+
+def test_callback_merges_dag_listener_and_quotes(
+    layout: SimpleNamespace,
+    spark_operator: type,
+    variable: Callable[..., SimpleNamespace],
+    jar_ok: list[tuple[str, str]],
+) -> None:
+    """DAG-значение с кавычкой (раньше нелитерализуемое) мерджится как обычная строка."""
+    variable(raw=VALID_VARIABLE)
+    task = layout.cls(dag=DummyDag(), conf={"spark.extraListeners": 'com.x."Weird"Listener'})
+
+    _run_callback(task)
+
+    assert getattr(task, layout.conf)["spark.extraListeners"] == (
+        'com.x."Weird"Listener,io.openlineage.spark.agent.OpenLineageSparkListener'
+    )
+
+
+def test_callback_refusal_leaves_task_untouched(
+    layout: SimpleNamespace,
+    spark_operator: type,
+    variable: Callable[..., SimpleNamespace],
+    probe_forbidden: None,
+) -> None:
+    """enabled=false → conf и jars байт-в-байт как были, зонд не звался."""
+    variable(raw=json.dumps({"enabled": False, "spark_conf": {}, "openlineage_jar": "hdfs:///x.jar"}))
+    conf_before = {"spark.executor.cores": "2"}
+    task = layout.cls(dag=DummyDag(), conf=dict(conf_before), jars="a.jar")
+
+    _run_callback(task)
+
+    assert getattr(task, layout.conf) == conf_before
+    assert getattr(task, layout.jars) == "a.jar"
+
+
+def test_callback_refusal_on_missing_jar(
+    layout: SimpleNamespace,
+    spark_operator: type,
+    variable: Callable[..., SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Зонд не подтвердил jar → ни одного ключа не появилось, причина в логе."""
+    variable(raw=VALID_VARIABLE)
+    monkeypatch.setattr(ol_policy.probe, "jar_available", lambda jar_uri, path: False)
+    task = layout.cls(dag=DummyDag(), conf={})
+
+    _run_callback(task)
+
+    assert getattr(task, layout.conf) == {}
+    assert getattr(task, layout.jars) is None
+
+
+def test_callback_url_overrides_dag_value_with_log(
+    layout: SimpleNamespace,
+    spark_operator: type,
+    variable: Callable[..., SimpleNamespace],
+    jar_ok: list[tuple[str, str]],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """DAG задал transport.url — OL-значение побеждает, конфликт залогирован info."""
+    caplog.set_level(logging.INFO)
+    variable(raw=VALID_VARIABLE)
+    task = layout.cls(dag=DummyDag(), conf={"spark.openlineage.transport.url": "http://other:1"})
+
+    _run_callback(task)
+
+    assert getattr(task, layout.conf)["spark.openlineage.transport.url"] == "http://marquez:5000"
+    assert any("переопределяется" in r.getMessage() for r in caplog.records)
+
+
+def test_callback_never_raises(
+    layout: SimpleNamespace, spark_operator: type, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Внутренний сбой гасится warning'ом, наружу ничего не летит."""
+    monkeypatch.setattr(ol_policy.variable, "_cfg", lambda: (_ for _ in ()).throw(RuntimeError("boom")))
+
+    _run_callback(layout.cls(dag=DummyDag(), conf={}))  # не бросает
+
+
+def test_callback_ignores_context_without_task() -> None:
+    """Контекст без таски (или чужой объект) — тихий выход."""
+    callback.ol_execute_callback({})
+
+
+def test_callback_force_on_beats_disabled(
+    layout: SimpleNamespace,
+    spark_operator: type,
+    variable: Callable[..., SimpleNamespace],
+    jar_ok: list[tuple[str, str]],
+) -> None:
+    """Форс таски включает лайнидж, даже если Variable.enabled=false (аналог test_force_enables_without_enabled_flag)."""
+    variable(raw=json.dumps({
+        "enabled": False,
+        "spark_conf": {
+            "spark.extraListeners": "io.openlineage.spark.agent.OpenLineageSparkListener",
+            "spark.openlineage.transport.url": "http://marquez:5000",
+            "spark.openlineage.namespace": "stand",
+        },
+        "openlineage_jar": "hdfs:///jars/openlineage-spark.jar",
+    }))
+    task = layout.cls(dag=DummyDag(), conf={}, params={"openlineage": True})
+
+    _run_callback(task)
+
+    assert getattr(task, layout.conf)["spark.extraListeners"] == "io.openlineage.spark.agent.OpenLineageSparkListener"
 
 
