@@ -357,14 +357,37 @@ def _scalar(value: str, dag_cur: str | None, key: str) -> str:
 
 
 def _resolve_jar(cfg: dict[str, object], dag_cur: str | None) -> str:
-    """Заглушка Task 6: реализация зонда приезжает в Task 7.
+    """Проверяет наличие jar'а в HDFS и оформляет URI под канал DAG-значения.
+
+    Мемо ``jar_available`` живёт на процессе воркера: поток тасок с одним и тем же
+    URI не перегаживает кластер запросами.
 
     :param cfg: разобранный конфиг из ``_validate_cfg``.
-    :param dag_cur: канал DAG-значения jar'ов.
-    :return: пустая строка.
+    :param dag_cur: канал DAG-значения jar'ов, выбранный парсом.
+    :return: строка для подстановки в атрибут ``jars``; "" при любом отказе.
     """
-    del cfg, dag_cur
-    return ""
+    jar_uri_obj = cfg.get("openlineage_jar")
+    jar_uri = jar_uri_obj.strip() if isinstance(jar_uri_obj, str) else ""
+    if not jar_uri:
+        logger.warn_once(("jar-unset",), "OpenLineage не включён: openlineage_jar в Variable не задан")
+        return ""
+    path = jar_path(jar_uri)
+    if path is None:
+        logger.warn_once(
+            ("jar-malformed",),
+            "OpenLineage не включён: openlineage_jar задан без схемы или без пути (%s)",
+            jar_uri,
+        )
+        return ""
+    if not jar_available(jar_uri, path):
+        logger.warn_once(
+            ("jar-absent",),
+            "OpenLineage не включён: jar отсутствует или недоступен в HDFS (%s). "
+            "Залейте его: scripts/seed-openlineage-jar.bat",
+            jar_uri,
+        )
+        return ""
+    return _emit(jar_uri, dag_cur, _merge_jars_pair, "spark.jars")
 
 
 def ol_macro(field: str, forced: bool | None = None, dag_cur: str | None = "") -> str:

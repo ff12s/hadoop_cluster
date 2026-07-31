@@ -1420,6 +1420,100 @@ def test_listener_constant_is_gone() -> None:
 
 
 # ---------------------------------------------------------------------------
+# _resolve_jar: зонд jar'а на рендере
+# ---------------------------------------------------------------------------
+
+
+def test_macro_jar_merges_with_dag_jars(
+    variable: Callable[..., SimpleNamespace], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Канал-литерал: DAG-jar'ы первыми, наш последним."""
+    _variable_full(variable)
+    monkeypatch.setattr(ol_policy, "jar_available", lambda jar_uri, path: True)
+
+    assert ol_policy.ol_macro("jar", None, "a.jar") == "a.jar,hdfs://namenode:9000/o.jar"
+
+
+def test_macro_jar_alone_when_dag_silent(
+    variable: Callable[..., SimpleNamespace], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Канал '': только наш jar, без разделителя."""
+    _variable_full(variable)
+    monkeypatch.setattr(ol_policy, "jar_available", lambda jar_uri, path: True)
+
+    assert ol_policy.ol_macro("jar", None, "") == "hdfs://namenode:9000/o.jar"
+
+
+def test_macro_jar_prefixes_comma_for_jinja_channel(
+    variable: Callable[..., SimpleNamespace], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Канал None: наш jar дописывается через запятую."""
+    _variable_full(variable)
+    monkeypatch.setattr(ol_policy, "jar_available", lambda jar_uri, path: True)
+
+    assert ol_policy.ol_macro("jar", None, None) == ",hdfs://namenode:9000/o.jar"
+
+
+def test_macro_jar_empty_when_probe_says_no(
+    variable: Callable[..., SimpleNamespace], monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Probe не подтвердил jar — пустая строка и warning, DAG-jar'ы не тронуты."""
+    _variable_full(variable)
+    monkeypatch.setattr(ol_policy, "jar_available", lambda jar_uri, path: False)
+
+    assert ol_policy.ol_macro("jar", None, "a.jar") == ""
+    assert any("HDFS" in message for message in warnings_of(caplog))
+
+
+def test_macro_jar_rejects_uri_without_scheme(
+    variable: Callable[..., SimpleNamespace], monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """URI без схемы spark-submit трактует как локальный файл — не подмешиваем."""
+    variable(raw=json.dumps({
+        "enabled": True,
+        "spark_conf": {
+            "spark.extraListeners": "io.ol.L",
+            "spark.openlineage.transport.url": "http://marquez:5000",
+            "spark.openlineage.namespace": "ns",
+        },
+        "openlineage_jar": "/opt/openlineage/o.jar",
+    }))
+
+    def _forbidden(jar_uri: str, path: str) -> bool:
+        pytest.fail("зонд не должен вызываться для URI без схемы")
+
+    monkeypatch.setattr(ol_policy, "jar_available", _forbidden)
+
+    assert ol_policy.ol_macro("jar", None, "") == ""
+    assert any("без схемы" in message for message in warnings_of(caplog))
+
+
+def test_macro_jar_probes_once_per_uri(
+    variable: Callable[..., SimpleNamespace], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Два вызова макроса — один поход в сеть: мемо по URI держит результат."""
+    _variable_full(variable)
+    probed: list[str] = []
+
+    def _counting_probe(path: str) -> bool:
+        """Считает походы в HDFS и всегда подтверждает jar.
+
+        :param path: путь jar'а внутри HDFS.
+        :return: True.
+        """
+        probed.append(path)
+        return True
+
+    monkeypatch.setattr(ol_policy, "_probe", _counting_probe)
+
+    first = ol_policy.ol_macro("jar", None, "")
+    second = ol_policy.ol_macro("jar", None, "")
+
+    assert first == second == "hdfs://namenode:9000/o.jar"
+    assert probed == ["/o.jar"]
+
+
+# ---------------------------------------------------------------------------
 # Гейт типа и инвариант 1 (apply_policy)
 # ---------------------------------------------------------------------------
 
