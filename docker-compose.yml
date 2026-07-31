@@ -42,8 +42,8 @@ x-airflow-env: &airflow-env
 x-airflow-volumes: &airflow-volumes
   - ./airflow/dags:/opt/airflow/dags
   - ./airflow/jobs:/opt/airflow/jobs
-  # Каталогом, а не файлом: cluster policy разложена на несколько модулей
-  # (airflow_local_settings.py, ol_policy.py, hadoop_conf.py) плюс тесты.
+  # Каталогом, а не файлом: cluster policy теперь пакет (airflow_local_settings.py
+  # + пакет ol_policy/ с hadoop_conf.py, utils.py и т.д.) плюс тесты.
   - ./airflow/config:/opt/airflow/config:ro
   - ./spark/scripts/pyspark_pi.py:/opt/airflow/jobs/pyspark_pi.py:ro
   - ./airflow/logs:/opt/airflow/logs
@@ -240,7 +240,7 @@ services:
       AIRFLOW_ADMIN_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD:-admin}
       # Единственный способ перезатереть Variable openlineage_config значениями
       # из окружения: обычный старт существующую переменную не трогает.
-      OPENLINEAGE_CONFIG_RESEED: ${OPENLINEAGE_CONFIG_RESEED:-true}
+      OPENLINEAGE_CONFIG_RESEED: ${OPENLINEAGE_CONFIG_RESEED:-false}
     volumes: *airflow-volumes
     ports:
       - "8080:8080"  # Airflow Web UI
