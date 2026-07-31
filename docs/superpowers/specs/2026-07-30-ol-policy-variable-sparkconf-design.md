@@ -1,7 +1,8 @@
 # Cycle 1: Variable хранит `spark_conf` целиком и `openlineage_jar`, без чтения Variable на парсе
 
-**Дата:** 2026-07-30
-**Статус:** утверждён (brainstorming), готов к плану реализации
+**Дата:** 2026-07-30, Ревизия 3 — 2026-07-31
+**Статус:** Ревизия 3 утверждена (brainstorming), готова к плану реализации. Ревизия 2 была
+реализована и откачена — см. §12
 **Артефакт:** `airflow/config/ol_policy/__init__.py`, `airflow/scripts/start-airflow.sh`, `env_example`, `docker-compose.yml`, `airflow/config/tests/test_ol_policy.py`, `airflow/config/tests/conftest.py`, `README.md`, `tests/README.md`, `airflow/Dockerfile`
 **Предшественник:** [2026-07-29 OpenLineage policy config](2026-07-29-openlineage-policy-config-design.md), §10 которого уже предусматривает этот цикл «в два захода»
 
@@ -68,16 +69,19 @@
 | `EnvironmentVariablesBackend` стоит **первым** в `DEFAULT_SECRETS_SEARCH_PATH`; `AIRFLOW_VAR_OPENLINEAGE_CONFIG` перекрывает метастор | `airflow/secrets/__init__.py:33`; `airflow/secrets/environment_variables.py:49` | ничего |
 | `apache-airflow-providers-openlineage` 1.11.0 в облачной среде не имеет опций инъекции parent-job в Spark-conf; конкурирующего писателя в conf таски не появляется | `airflow/providers/openlineage/provider.yaml` (тег `1.11.0`) | ничего |
 | `_get_hook` провайдера читает `self._conf` (4.1.1) либо `self.conf` (4.10.0); шаблонизация conf входит в `template_fields` — Jinja рендерится на воркере перед запуском таски | `spark_submit.py:75-79, 126, 166` (тег `4.1.1`); то же в `4.10.0` для публичных имён | ничего — `operator_attrs` адресует оба варианта |
-| `--jars` оператора в `SparkSubmitArguments.loadEnvironmentArguments` стоит **раньше** `spark.jars`: `Option(jars).orElse(sparkProperties.get(JARS.key))` — явный `--jars` вытесняет `spark.jars` как источник | `core/.../deploy/SparkSubmitArguments.scala` (тег `v3.5.2`) | ничего — мердж через `merge_jars` в этой итерации кладёт итог в `conf["spark.jars"]`, атрибут `jars` не пишется |
+| `--jars` оператора в `SparkSubmitArguments.loadEnvironmentArguments` стоит **раньше** `spark.jars`: `Option(jars).orElse(sparkProperties.get(JARS.key))` — явный `--jars` вытесняет `spark.jars` как источник | `core/.../deploy/SparkSubmitArguments.scala` (тег `v3.5.2`) | **исправлено в Ревизии 3**: итог `merge_jars` пишется в **атрибут `jars`** оператора, а не в `conf["spark.jars"]`. Если DAG задал `jars=`, то `conf["spark.jars"]` Spark не посмотрит вовсе — запись мерджа туда потеряла бы наш jar |
 | Пустой `spark.extraListeners` безопасен: `.stringConf.toSequence.createOptional`, `Utils.stringToSeq` фильтрует пустые, `loadExtensions` делает `flatMap` | `core/.../internal/config/package.scala:1423-1428`, `core/.../util/Utils.scala:2754-2772` (тег `v3.5.2`) | ничего |
 | Полное имя класса листенера — `io.openlineage.spark.agent.OpenLineageSparkListener`; сопутствующие ключи `spark.openlineage.transport.type`/`.url`/`spark.openlineage.namespace` | доки OpenLineage | имя **больше не хардкодится** в политике — Variable owns listener, §4 |
 | Зонд HDFS через демон-поток, мемо по URI с TTL 300 с, дедлайн 5 с — перенесён из §6.1 предка **без изменений**: единственный stdlib-примитив с гарантированным дедлайном, покрывает `getaddrinfo` (которому таймаут сокета не передан) | предок §6.1 | **место вызова**: с парса (`inject_openlineage`) → на рендер (`ol_macro` → `_resolve_jar`), §4 |
 | `airflow variables set --json` означает сериализовать, а не «значение уже JSON»: `Variable.set(key, value, serialize_json=args.json)` при `serialize_json=True` делает `json.dumps(value, indent=2)` | `airflow/cli/commands/variable_command.py::variables_set`; `airflow/models/variable.py::set` | ничего — `start-airflow.sh` уже пишет без `--json` |
 | `airflow variables get` при отсутствии ключа поднимает `SystemExit` — ненулевой код возврата, пригоден для идемпотентного сидинга | `airflow/cli/commands/variable_command.py:41-51` | ничего |
-| `TaskInstance.render_template` рекурсивно рендерит значения `dict` в `template_fields`; `conf` оператора входит в `template_fields` | `airflow/models/taskinstance.py:1531`; `spark_submit.py:75-79` | новое: на рендере политика вызывает `_cfg` (один раз на процесс), `_validate_cfg` (один раз на процесс), `_resolve_jar` (один раз на URI); `_render_jar_merge` кладёт `merge_jars(...)` в `conf["spark.jars"]` |
+| `TaskInstance.render_template` рекурсивно рендерит значения `dict` в `template_fields`; `conf` оператора входит в `template_fields` | `airflow/models/taskinstance.py:1531`; `spark_submit.py:75-79` | новое: на рендере политика вызывает `_cfg` (один раз на процесс), `_validate_cfg` (один раз на процесс), probe jar'а (один раз на URI) |
+| `AbstractOperator._do_render_template_fields` делает `setattr(parent, attr_name, rendered_content)` **после** рендера поля — на момент рендера исходное значение атрибута ещё цело | `airflow/models/abstractoperator.py` (2.6.3, прочитано `inspect.getsource` 2026-07-31) | справочно: в Ревизии 3 не используется — мердж собирается на парсе |
+| Возврат макроса из `user_defined_macros` **не рендерится повторно** | [FAQ — Macros defined in user_defined_macros are not recursively rendered](https://airflow.apache.org/docs/apache-airflow/stable/faq.html) | новое: макрос обязан отдавать готовое значение; собственная Jinja DAG'а должна остаться **в строке**, а не проходить через возврат макроса |
 | `DAG.get_template_env()` строит `SandboxedEnvironment` с `cache_size: 0` — каждый рендер заново | `airflow/models/dag.py::get_template_env` | ничего |
 | `ParamsDict.__getitem__` бросает `ParamValidationError`; `MutableMapping.get` её не ловит | `airflow/models/param.py` | ничего — `_level_forced` уже под `try/except` |
-| Jinja `template_local` позволяет достать значение **текущего** атрибута оператора / ключа conf до того, как результат макроса записан обратно | [Jinja2 docs — Context locals](https://jinja.palletsprojects.com/en/3.1.x/api/#the-context) | новое: `_resolve_local("jars")` и `_resolve_local("spark.jars")` читают текущие значения без Variable/HDFS |
+| ~~Jinja `template_local` позволяет достать значение текущего атрибута оператора / ключа conf~~ — **ФАКТ ОПРОВЕРГНУТ** | проверка 2026-07-31 на установленной Airflow 2.6.3: `hasattr(airflow.plugins_manager, "get_template_locals") is False`; в доках Airflow stable про template locals нет ничего; цитировавшийся раздел Jinja «Context locals» описывает `Context`/`derived`, а не чтение рендерящегося атрибута | **Ревизия 3 удаляет `_resolve_local` целиком.** Функция всегда возвращала бы `None` в проде: мердж listener'ов выродился бы в OL-only, `spark.jars` DAG'а был бы затёрт. Тесты этого не ловили — они монкипатчили `_resolve_local` |
+| `jinja2.pass_context` существует (3.1.2) и передаёт `Context` первым аргументом; `DAG.get_template_env` кладёт `user_defined_macros` в `env.globals`; `TaskInstance.get_template_context` содержит `"task": task` | [Jinja API — pass_context](https://jinja.palletsprojects.com/en/stable/api); проверено запуском 2026-07-31 | рассмотрено как замена `_resolve_local` и **отклонено**: возврат макроса не рендерится повторно, поэтому DAG с `{{ var.value.x }}` в `jars` получил бы сырой текст. См. §4.3 |
 
 **Чего эта ревизия не меняет и не перепроверяет:** иерархия гейтов §4.2 предка, инварианты 1–9
 предка (кроме инварианта 6, чьё тело сдвигается на рендер), две раскладки провайдера, ленивая
@@ -109,8 +113,8 @@
    выигрыш: `[core] dag_file_processor_timeout` (50 с) больше не делит время с зондом.
 3. **Jar мерджится с тем, что передал DAG.** DAG, задавший `jars="a.jar"` или
    `conf["spark.jars"]="a.jar"`, получает **`a.jar + openlineage-jar`**, а не просто
-   перезаписывается нашим. Два канала (`jars` и `conf["spark.jars"]`) объединяются через
-   `merge_jars(operator.jars, conf["spark.jars"], our_jar)` — те же правила, что в предке.
+   перезаписывается нашим. Два канала (`jars` и `conf["spark.jars"]`) объединяются на парсе
+   через `merge_jars`, итог пишется в **атрибут `jars`**; наш URI дописывает макрос на рендере.
    Дополнительно: OL-`spark_conf` по **lineage-ключам** мерджится **поверх** DAG-conf
    (`OL побеждает по ключам lineage` — жёсткое правило); не-lineage `spark.*` остаются за
    пользователем.
@@ -119,28 +123,77 @@
 
 ### 4.1 Изменения в `inject_openlineage` (парс)
 
+**Парс остаётся писателем `conf` и атрибута `jars` — но пишет только строки, не значения.**
+Ревизия 2 предлагала «только регистрируем макрос»; это нежизнеспособно: если политика не
+положит `{{ __openlineage_v1(...) }}` в conf таски, макросу неоткуда взяться, и лайнидж
+заработает только у DAG'ов, которые вписали вызов руками. Это противоречит цели «без правок
+в DAG'ах».
+
 ```python
+_UNSAFE_FOR_LITERAL = ("{{", "{%", "'", '"')
+
+
+def _dag_channel(value: object) -> tuple[str, str | None]:
+    """Каким каналом отдать DAG-значение макросу.
+
+    :param value: значение из conf/атрибута таски, каким его задал DAG.
+    :return: пара ``(prefix, dag_cur)``. ``prefix`` дописывается в строку перед
+        вызовом макроса; ``dag_cur`` уходит третьим аргументом макроса.
+    """
+    text = value.strip() if isinstance(value, str) else ""
+    if not text:
+        return "", ""                                   # DAG молчит — макрос вернёт значение без разделителя
+    if any(marker in text for marker in _UNSAFE_FOR_LITERAL):
+        return text, None                               # своя Jinja/кавычки — текст остаётся в строке
+    return "", text                                     # безопасный литерал — макрос смерджит и дедуплицирует
+
+
+def _macro_call(field: str, forced: str, dag_cur: str | None) -> str:
+    """Текст вызова макроса для подстановки в conf."""
+    literal = "none" if dag_cur is None else f"'{dag_cur}'"
+    return f"{{{{ {MACRO}('{field}', {forced}, {literal}) }}}}"
+
+
 def inject_openlineage(task: object) -> None:
-    # ... гейты 1-4 без изменений: operator_attrs, lineage_forced, dag, MACRO ...
-    macros = dict(getattr(dag, "user_defined_macros", {}) or {})
+    # гейты 1-4 без изменений: operator_attrs, lineage_forced, dag, MACRO
+    macros = dict(getattr(dag, "user_defined_macros", None) or {})
     macros[MACRO] = ol_macro
-    dag.user_defined_macros = macros            # только макрос; conf и jars — на рендере
+    dag.user_defined_macros = macros
+
+    forced = "true" if lineage_forced(task) is True else "none"
+    cur_conf = dict(getattr(task, attrs.conf) or {})
+
+    listener_prefix, listener_cur = _dag_channel(cur_conf.get("spark.extraListeners"))
+    # оба канала jar'ов известны на парсе — склеиваем их до макроса
+    jars_prefix, jars_cur = _dag_channel(
+        utils.merge_jars(getattr(task, attrs.jars), cur_conf.get("spark.jars"))
+    )
+    # скаляры: prefix отбрасывается — OL перекрывает DAG-значение, литерал нужен только логу
+    _, url_cur = _dag_channel(cur_conf.get("spark.openlineage.transport.url"))
+    _, ns_cur = _dag_channel(cur_conf.get("spark.openlineage.namespace"))
+
+    setattr(task, attrs.conf, {
+        **cur_conf,
+        "spark.extraListeners": listener_prefix + _macro_call("listener", forced, listener_cur),
+        "spark.openlineage.transport.type": "http",
+        "spark.openlineage.transport.url": _macro_call("url", forced, url_cur),
+        "spark.openlineage.namespace": _macro_call("namespace", forced, ns_cur),
+        "spark.openlineage.columnLineage.datasetLineageEnabled": "true",
+    })
+    setattr(task, attrs.jars, jars_prefix + _macro_call("jar", forced, jars_cur))
 ```
 
-**`inject_openlineage` больше не пишет ни в `conf`, ни в `jars`.** Только регистрирует макрос
-в `dag.user_defined_macros`. Все мутации conf и jars — на рендере в `ol_macro`, где `_cfg` уже
-прочитан и `jar_available` уже вызван (или закэширован мемо).
+Ключевое:
 
-Это **откат к предковой схеме «всё через макрос»**, но с тремя отличиями:
-
-- Маппинг `field → как мерджить` живёт в `ol_macro`. `field="jar"` → добавить jar в `spark.jars`
-  с дедупликацией против того, что задал DAG (через `_render_jar_merge`). `field="listener"`/`url`/
-  `namespace` → записать значение, **OL побеждает по ключам lineage** (жёсткое правило).
-- `ol_macro('jar')` сам ходит в `jar_available` и возвращает результат `merge_jars` через
-  `_render_jar_merge`, который читает **текущие** значения `jars` и `conf["spark.jars"]` через
-  Jinja-локалы (`_resolve_local`) и дописывает свой URI.
-- Парс больше **не знает** про Variable и **не зондирует** HDFS. Инвариант 6 усиливается до
-  «на парсе ноль обращений к Variable, метастору и HDFS».
+- **Ноль обращений к Variable, метастору и HDFS.** На парсе только чтение атрибутов таски и
+  сборка строк. `os.environ["OPENLINEAGE_JAR"]`, `jar_path`, `jar_available` из
+  `inject_openlineage` уходят целиком — probe живёт на рендере.
+- **Итог jar-мерджа пишется в атрибут `jars`, не в `conf["spark.jars"]`** — иначе при заданном
+  DAG'ом `jars=` Spark наш jar не увидит (§2, `Option(jars).orElse(...)`).
+- **OL побеждает по lineage-ключам** буквально: наши четыре ключа пишутся **после** `**cur_conf`,
+  то есть перекрывают DAG-значение. Остальные ключи DAG-conf не трогаются.
+- **DAG-значения не теряются**: они либо переданы макросу литералом (`dag_listener` / `dag_jars`),
+  либо остаются в строке перед вызовом макроса (`prefix`). См. §4.3.
 
 ### 4.2 Контракт `ol_macro` и `_validate_cfg` (рендер)
 
@@ -156,18 +209,25 @@ def _cfg() -> dict[str, object] | None:
     return parsed
 
 
-def _validate_cfg(cfg: dict[str, object] | None) -> dict[str, object] | None:
+@functools.lru_cache(maxsize=1)
+def _validate_cfg() -> dict[str, object] | None:
     """Валидирует Variable **один раз на процесс**: список недостающих полей — одним warning'ом.
 
-    ``_cfg`` уже мемоизирован, и для одного процесса воркера это один вызов на всё. Если
-    Variable негоден, возвращает ``None``; ``ol_macro`` в этом случае пишет отдельный
-    warning «конфиг не валиден» и возвращает ``""``.
+    Функция **не принимает аргументов** и сама зовёт ``_cfg()``. Вариант из Ревизии 2
+    (``_validate_cfg(cfg: dict)`` под ``lru_cache``) неработоспособен: ``lru_cache``
+    хэширует аргументы, а dict нехэшируем — первый же вызов дал бы
+    ``TypeError: unhashable type: 'dict'``.
+
+    ``_cfg`` уже мемоизирован; ``_validate_cfg`` под тем же ``lru_cache(maxsize=1)`` даёт
+    один вызов на процесс воркера — иначе aggregated warning «Variable неполна» сработал
+    бы на каждом из четырёх вызовов ``ol_macro`` за один рендер. Если Variable негоден,
+    возвращает ``None``; ``ol_macro`` в этом случае повторный warning не пишет.
 
     Это и есть «**один раз проверить при триггере**»: одна валидация — один warning.
 
-    :param cfg: разобранный dict из ``_cfg`` либо None.
-    :return: тот же cfg, либо None, если он непригоден.
+    :return: cfg из ``_cfg``, либо None, если он непригоден.
     """
+    cfg = _cfg()
     if cfg is None:
         logger.warning("ol_policy: Variable openlineage_config не задана или не JSON-объект — lineage не включён")
         return None
@@ -199,21 +259,34 @@ def ol_macro(field: str, forced: bool | None = None, dag_cur: str | None = None)
 
     Семантика по ``field``:
 
-    - ``"listener"`` → значение ``spark.extraListeners`` из Variable после ``_clean``.
-      Если OL включён и ключ в Variable есть — OL побеждает DAG-conf; пишется info-лог.
-    - ``"url"`` → значение ``spark.openlineage.transport.url`` из Variable.
-    - ``"namespace"`` → значение ``spark.openlineage.namespace`` из Variable.
-    - ``"jar"`` → ``merge_jars(current_jars, current_conf_jars, our_jar)`` через
-      ``_render_jar_merge``; пустая строка, если lineage выкл или probe вернул ``False``.
+    - ``"listener"`` → значение из Variable, оформленное под канал ``dag_cur`` через ``_emit``
+      (мердж с дедупом, либо значение как есть, либо значение с ведущей запятой).
+    - ``"url"`` → значение ``spark.openlineage.transport.url`` из Variable; при пустом
+      результате пишется warning «url не подмешан» и возвращается ``""``.
+    - ``"namespace"`` → значение ``spark.openlineage.namespace`` из Variable; аналогично.
+    - ``"jar"`` → URI из Variable после probe, оформленный тем же ``_emit``; пустая строка,
+      если lineage выкл или probe вернул ``False``.
 
     :param field: имя ключа (одно из четырёх).
     :param forced: True, если DAG форсировал включение; None — форса нет; False — форс-выключение.
-    :param dag_cur: текущее значение lineage-ключа в DAG-conf (до подстановки этого макроса).
-      ``None`` или ``""`` — DAG не задал. Используется для конфликтного info-лога по
-      жёсткому правилу «OL побеждает по lineage-ключам» (см. §4.3).
+    :param dag_cur: DAG-значение того же ключа, переданное **парсом**. Три состояния:
+
+      * ``""`` — DAG ключ не задавал. Макрос возвращает своё значение без разделителя.
+      * строка — безопасный литерал DAG-значения. Макрос возвращает полный мердж с дедупом
+        (``merge_listeners`` / ``merge_jars``), DAG-значения идут первыми.
+      * ``None`` — DAG-значение содержит свою Jinja или кавычки и потому осталось **текстом
+        в строке слева** от вызова макроса. Макрос возвращает своё значение **с ведущей
+        запятой**; дедуп в этом случае невозможен (warning на парсе).
+
+      Такой контракт делает разделитель ответственностью макроса: висячей запятой не
+      возникает ни при выключенном lineage, ни при пустом DAG-значении.
+
+      Это для веток ``listener`` и ``jar`` (списки). Для скаляров ``url`` и ``namespace``
+      ``dag_cur`` — **только материал конфликтного info-лога**: значение возвращается
+      целиком, разделителя нет, DAG-значение перекрыто на парсе.
     :return: значение для подстановки в conf; пустая строка, если lineage выкл или конфиг негоден.
     """
-    cfg = _validate_cfg(_cfg())
+    cfg = _validate_cfg()
     if cfg is None:
         return ""
 
@@ -230,12 +303,9 @@ def ol_macro(field: str, forced: bool | None = None, dag_cur: str | None = None)
     if field == "listener":
         value = _clean(spark_conf.get("spark.extraListeners"))
         if not value:
-            # OL-listener не задан в Variable — берём DAG-conf без изменений через
-            # `_render_listener_merge("", dag_cur)`. Эта утилита просто вернёт dag_cur,
-            # если наш листенер пустой, либо объединит, если DAG передал свой CSV.
-            return _render_listener_merge("", _resolve_local("spark.extraListeners"))
-        # Наш листенер задан — мерджим с тем, что уже есть в DAG-conf.
-        return _render_listener_merge(value, _resolve_local("spark.extraListeners"))
+            logger.warning("ol_policy: spark_conf.spark.extraListeners не задан — listener не подмешан")
+            return ""
+        return _emit(value, dag_cur, utils.merge_listeners, "spark.extraListeners")
     if field == "url":
         value = _clean(spark_conf.get("spark.openlineage.transport.url"), require_scheme=True)
         if not value:
@@ -259,15 +329,41 @@ def ol_macro(field: str, forced: bool | None = None, dag_cur: str | None = None)
             )
         return value
     if field == "jar":
-        return _resolve_jar(spark_conf, cfg)
+        return _resolve_jar(cfg, dag_cur)
     return ""
 
 
-def _resolve_jar(spark_conf: dict[str, object], cfg: dict[str, object]) -> str:
-    """Probe URI и возврат ``merge_jars``-результата. Пустая строка при любом отказе + warning.
+def _emit(value: str, dag_cur: str | None, merge: Callable[[object, object], str], key: str) -> str:
+    """Оформить наше значение под тот канал, которым пришло DAG-значение.
 
-    Мемо ``jar_available`` живёт на процессе воркера (как раньше) — повторный запуск таски
-    с тем же URI не идёт в сеть.
+    Единственное место, где решается разделитель. Контракт ``dag_cur`` — см. ``ol_macro``.
+
+    :param value: наше значение из Variable (уже проверено ``_clean``).
+    :param dag_cur: ``""`` / литерал / ``None`` — канал, выбранный парсом.
+    :param merge: ``utils.merge_listeners`` либо ``utils.merge_jars``.
+    :param key: имя ключа для лога.
+    :return: строка для подстановки.
+    """
+    if dag_cur is None:                       # текст DAG'а стоит слева — дописываем через запятую
+        logger.info("ol_policy: %s дописан к DAG-значению (дедуп невозможен): %s", key, value)
+        return f",{value}"
+    if not dag_cur:                           # DAG молчал — отдаём как есть
+        logger.info("ol_policy: %s подмешан: %s", key, value)
+        return value
+    merged = merge(dag_cur, value)            # безопасный литерал — полный мердж с дедупом
+    logger.info("ol_policy: %s мердж: %s", key, merged)
+    return merged
+
+
+def _resolve_jar(cfg: dict[str, object], dag_cur: str | None) -> str:
+    """Probe URI и оформление результата. Пустая строка при любом отказе + warning.
+
+    Мемо ``jar_available`` живёт на процессе воркера — повторный запуск таски с тем же URI
+    в сеть не идёт.
+
+    :param cfg: разобранный Variable из ``_validate_cfg``.
+    :param dag_cur: канал DAG-значения jar'ов (см. ``ol_macro``).
+    :return: строка для подстановки в атрибут ``jars``; ``""``, если probe отказал.
     """
     jar_uri_obj = cfg.get("openlineage_jar")
     jar_uri = jar_uri_obj.strip() if isinstance(jar_uri_obj, str) else ""
@@ -276,59 +372,22 @@ def _resolve_jar(spark_conf: dict[str, object], cfg: dict[str, object]) -> str:
         return ""
     path = jar_path(jar_uri)
     if path is None:
-        logger.warning("ol_policy: openlineage_jar задано без схемы или без пути (%s) — jar не подмешан", jar_uri)
+        logger.warning("ol_policy: openlineage_jar задан без схемы или без пути (%s) — jar не подмешан", jar_uri)
         return ""
     if not jar_available(jar_uri, path):
         logger.warning("ol_policy: openlineage_jar не подтверждён в HDFS (%s) — jar не подмешан", jar_uri)
         return ""
-    return _render_jar_merge(jar_uri)
-
-
-def _render_jar_merge(our_jar: str) -> str:
-    """Склеить текущие каналы jar'ов с нашим через ``merge_jars``.
-
-    ``current_jars`` и ``current_conf_jars`` — текущие значения ``jars`` атрибута оператора
-    и ``conf["spark.jars"]`` **до** подстановки результата этого макроса. Доступ через
-    Jinja-локалы (``template_local``). Если локал недоступен — ``None``, ``merge_jars`` это
-    уже умеет (``utils._jar_items``).
-    """
-    current_jars = _resolve_local("jars")
-    current_conf_jars = _resolve_local("spark.jars")
-    merged = merge_jars(current_jars, current_conf_jars, our_jar)
-    logger.info("ol_policy: spark.jars мердж: %s", merged)
-    return merged
-
-
-def _render_listener_merge(our_listener: str, dag_cur: str | None) -> str:
-    """Склеить CSV-лист DAG-уровня с одиночным классом OL через ``merge_listeners``.
-
-    Жёсткое правило: «экстра листенерс тоже должен мерджится с тем что уже передано в даге».
-    Дедуп сохраняет порядок: DAG-listener'ы идут первыми, OL-listener последним (если его
-    в списке ещё нет). Если ни то, ни другое — пустая строка (Spark игнорирует).
-    Если только DAG — возвращаем DAG как есть. Если только OL — возвращаем OL.
-    """
-    merged = merge_listeners(dag_cur, our_listener)
-    logger.info("ol_policy: spark.extraListeners мердж: %s", merged)
-    return merged
-
-
-def _resolve_local(name: str) -> str | None:
-    """Текущее значение ``name`` из Jinja template_local. None если локала нет.
-
-    Обёртка нужна, чтобы ``_render_jar_merge`` оставался юнит-тестируемым без живого Jinja.
-    В тестах мокается через monkeypatch ``ol_policy._resolve_local``.
-    """
-    from jinja2.runtime import Undefined
-    try:
-        from airflow.plugins_manager import get_template_locals   # type: ignore
-    except Exception:
-        return None
-    try:
-        value = get_template_locals().get(name)
-    except (KeyError, AttributeError, Undefined):
-        return None
-    return value if isinstance(value, str) else None
+    return _emit(jar_uri, dag_cur, utils.merge_jars, "spark.jars")
 ```
+
+**`_resolve_local` удалена.** Её единственный источник данных — несуществующий API (§2).
+Текущее DAG-значение приходит в макрос параметром `dag_cur`, который заполняет парс.
+
+**Тексты сообщений пишутся inline** в местах вызова логгера — отдельных `_MSG_*` констант
+не заводим. Дедупликация `warn_once` опирается на ключ-кортеж (`("no-var",)`,
+`("bad-shape",)`, …), а не на текст, поэтому вынос текстов ничего не давал. Требование
+«тексты причин попарно различимы» проверяется тестом по фактическому `caplog`: прогнать
+сценарии и сравнить записи, а не список констант.
 
 **`_cfg` остаётся чистым reader'ом** — без изменений по структуре.
 
@@ -346,41 +405,47 @@ URL негоден) пишет info- или warning-лог **на каждом �
 `_validate_cfg`); info-логи о включении/выключении lineage **не дедуплицируются** — таска,
 поведение которой молча отличается, это главный кандидат на расследование.
 
-### 4.3 Мердж на рендере
+### 4.3 Мердж: собирается на парсе, значение приходит с рендера
 
-**`spark.jars`** — мердж **объединением** (дедуп с сохранением порядка). DAG-jar'ы всегда
-остаются, наш jar добавляется, если probe подтвердил URI. `_render_jar_merge` делает именно
-это через `merge_jars(operator.jars, conf["spark.jars"], our_jar)` — жёсткое правило:
-«джарник важно чтобы мерджился в джарники переданные дагом а не просто переопределял все».
+Разделение ответственности буквальное:
 
-**`spark.extraListeners`** — это **CSV-список**, а не скаляр. Семантика «OL мерджится с
-DAG-listener'ами»:
+| Кто | Что знает | Что делает |
+| --- | --- | --- |
+| **парс** | DAG-значения `jars`, `conf["spark.jars"]`, `conf["spark.extraListeners"]` | склеивает два jar-канала, выбирает канал передачи (`_dag_channel`), собирает строку с вызовом макроса |
+| **рендер** | Variable, результат probe | отдаёт своё значение, оформленное под выбранный канал (`_emit`) |
 
-- Источники: `_resolve_local("spark.extraListeners")` (текущее значение в DAG-conf, до
-  рендера), результат `ol_macro('listener')` (значение из Variable, одиночный класс).
-- Объединение через ту же утилиту, что `spark.jars` — `merge_listeners(dag_cur, ol_list)`
-  (новая функция в `utils.py`, рядом с `merge_jars`): сплит по запятой, дедуп, сохранение
-  порядка (DAG-listener'ы идут первыми, OL-listener — последним, если его там ещё нет).
-- Если ни в Variable, ни в DAG-conf ничего нет — пустая строка (Spark игнорирует
-  пустые `spark.extraListeners` через `Utils.stringToSeq` — грounding §2).
-- Результат пишется в `conf["spark.extraListeners"]` через тот же макрос:
-  `conf["spark.extraListeners"] = "{{ macros.ol_macro('listener') }}"`.
+Почему не наоборот. Полный мердж на рендере требует, чтобы макрос увидел исходное
+DAG-значение. Читать его на рендере нечем: `get_template_locals` не существует (§2), а
+`pass_context` + `context["task"]` упирается в то, что возврат макроса **не рендерится
+повторно** — DAG с `{{ var.value.x }}` в `jars` получил бы этот текст сырым в
+`spark-submit`. Поэтому DAG-значение остаётся в строке, и мердж собирает парс.
 
-**`spark.openlineage.transport.url`** и **`spark.openlineage.namespace`** — скаляры; по ним
-**OL побеждает по lineage-ключам** (жёсткое правило: «если данный параметр конфа задан в
-даге, то опенлинедж его переопределяет если включён»). Реализация — через порядок рендера
-Jinja, без отдельной функции:
+**`spark.jars`** — оба канала DAG'а (`operator.jars` и `conf["spark.jars"]`) склеиваются на
+парсе через `merge_jars`, итог пишется в **атрибут `jars`** (§2: явный `--jars` вытесняет
+`spark.jars`). Наш URI дописывается макросом, если probe подтвердил его на рендере. Жёсткое
+правило «джарник мерджится, а не переопределяет» выполняется: DAG-jar'ы стоят в строке до
+вызова макроса и не зависят от того, что вернёт Variable.
 
-1. DAG передаёт оператору `conf={"spark.openlineage.transport.url": "dag-url"}` — Airflow
-   кладёт это в `task.conf` **до** рендера Jinja.
-2. Jinja рендерит **каждое значение** в `template_fields` (включая `conf`). URL/namespace
-   Airflow рендерит выражением `{{ macros.ol_macro('url') }}` (или `'namespace'`). Запись
-   по тому же ключу `conf["spark.openlineage.transport.url"]` **переписывает** DAG-уровень.
-3. Итоговое `conf["spark.openlineage.transport.url"]` = результат `ol_macro('url')` =
-   значение из Variable (если есть). DAG-conf-значение того же ключа — **затёрто** OL.
+**`spark.extraListeners`** — CSV-список. DAG-CSV известен парсу; OL-класс приходит из
+Variable. При безопасном DAG-значении макрос получает его литералом и делает
+`merge_listeners` с дедупом — это защищает от двух инстансов одного листенера (иначе
+дублирующиеся OL-события). При DAG-значении со своей Jinja дедуп невозможен, парс пишет
+warning.
 
-Поведение по веткам (с журналированием через `ol_macro(field, dag_cur=…)`, где `dag_cur` —
-текущее значение ключа в DAG-conf, читаемое через `_resolve_local`):
+**`spark.openlineage.transport.url`** и **`spark.openlineage.namespace`** — скаляры, **OL
+побеждает**. Механизм не «порядок рендера Jinja» (это фикция: если DAG положил литерал,
+рендерить нечего), а порядок ключей в словаре на парсе: наши ключи пишутся после `**cur_conf`
+и перекрывают DAG-значение.
+
+У этих двух веток `dag_cur` играет **другую роль** — он не канал мерджа, а материал для
+конфликтного info-лога: скаляр всегда возвращается целиком, разделителя нет. Парс отдаёт
+литерал DAG-значения (`""` — DAG не задавал, строка — задал, `None` — задал что-то с Jinja
+или кавычками), макрос пишет info «`<ключ>` в DAG-conf=… переопределяется OL-значением=…»
+и возвращает своё значение. `prefix` для скаляров отбрасывается — дописывать текст DAG'а
+слева было бы прямым нарушением правила «OL побеждает».
+
+Поведение по веткам (с журналированием через `ol_macro(field, forced, dag_cur)`, где `dag_cur` —
+DAG-значение ключа, переданное парсом):
 
 - **Есть значение в Variable, нет в DAG-conf** (`dag_cur=None`/`""`) → OL-значение попадает
   в conf. Никакого конфликта; info «`spark.openlineage.transport.url` подмешан».
@@ -429,7 +494,7 @@ Variable, но в conf не попадают.
 | `None` или `True` | `True` | dict | да, url негоден | — | **выкл** | warning «`spark.openlineage.transport.url` негодно» |
 | `None` или `True` | `True` | dict | да, всё годно | негоден/пуст | **выкл** | warning «`openlineage_jar` не задан» |
 | `None` или `True` | `True` | dict | да, всё годно | валиден, probe `False` | **выкл по jar'у** | warning «`openlineage_jar` не подтверждён в HDFS» |
-| `None` или `True` | `True` | dict | да, всё годно | валиден, probe `True` | **вкл** | info в `_render_jar_merge` |
+| `None` или `True` | `True` | dict | да, всё годно | валиден, probe `True` | **вкл** | info из `_emit` («мердж» / «подмешан» / «дописан») |
 | `True` | любое (включая негодный enabled) | dict | да | валиден | **вкл через forced** | info «lineage включён через forced=True» |
 
 **Ключевые правки относительно Ревизии 1 этой спеки** (по жёстким правилам пользователя):
@@ -523,8 +588,12 @@ Variable, но в conf не попадают.
 не зависит — инвариант 7 предка («вклад политики в время парса ограничен сверху числом»)
 **усиливается**: на парсе нет ни одного сетевого вызова.
 
-**Сброс модульного состояния в `reset_state()`** — без изменений: `_warned.clear()`,
-`_cfg.cache_clear()`, `_jar_memo.clear()`.
+**Сброс модульного состояния в `reset_state()`**: `_warned.clear()`, `_cfg.cache_clear()`,
+`_validate_cfg.cache_clear()`, `_jar_memo.clear()` **и `_passthrough_cache = None`**.
+Последнее — исправление найденного бага: `passthrough_exceptions()` кэширует результат
+на модуле, а тесты подменяют `airflow.*` в `sys.modules`; без сброса кэш переживает границу
+теста и даёт порядко-зависимые падения `test_passthrough_*` (воспроизведено 2026-07-31:
+7 падений в полном прогоне, зелено поодиночке).
 
 ## 7. Сидинг Variable (без изменений в команде, изменение в формате)
 
@@ -571,13 +640,17 @@ print(json.dumps({
 - **Инвариант 13 — OL побеждает по URL/namespace.** Для `spark.openlineage.transport.url`
   и `spark.openlineage.namespace` итоговое значение в conf берётся из Variable, даже если DAG
   задал свой ключ; пишется info-лог с обоими значениями.
-- **Инвариант 16 — `spark.extraListeners` мерджится.** Итоговое значение в conf —
-  `merge_listeners(_resolve_local("spark.extraListeners"), our_listener)`: DAG-listener'ы
-  идут первыми, OL-listener последним (если его ещё нет). Никогда не затирает DAG-listener'ы.
-  Пишется info-лог с обоими источниками.
-- **Инвариант 14 — jar мерджится через `merge_jars`.** Политика никогда не затирает ни
-  `operator.jars`, ни `conf["spark.jars"]` целиком. Итоговое значение `spark.jars` —
-  `merge_jars(operator.jars, conf["spark.jars"], our_jar)`.
+- **Инвариант 16 — `spark.extraListeners` мерджится.** DAG-CSV никогда не затирается: он
+  либо передан макросу литералом и слит через `merge_listeners` (DAG-listener'ы первыми,
+  OL-listener последним, дедуп), либо стоит текстом слева от вызова макроса. Пишется
+  info-лог с результатом.
+- **Инвариант 14 — jar мерджится, итог пишется в атрибут `jars`.** Политика не затирает ни
+  `operator.jars`, ни `conf["spark.jars"]`: оба канала склеиваются на парсе через
+  `merge_jars` и попадают в атрибут `jars`. Запись итога в `conf["spark.jars"]` **запрещена** —
+  при заданном DAG'ом `jars=` Spark этот ключ игнорирует (§2).
+- **Инвариант 17 — разделитель принадлежит макросу.** Ни одна собранная на парсе строка не
+  содержит запятой, соседствующей с вызовом макроса. Пустой результат макроса обязан давать
+  корректное значение conf, а не `"a.jar,"`.
 - **Инвариант 15 — никаких silent-веток.** Каждое решение политики (включили lineage,
   выключили, конфиг негоден, jar не подмешан, OL-перебил-DAG-conf) пишет info- или
   warning-лог. Дедуплицируется только warning «Variable неполна» через `_validate_cfg` (один
@@ -595,30 +668,38 @@ print(json.dumps({
   не происходит — `_validate_cfg` уже вернул `None`.
 - **`_validate_cfg` запускается один раз на процесс.** После двух вызовов `ol_macro` подряд
   счётчик вызовов `_validate_cfg` равен 1 (мемо `_cfg` + детерминизм `_validate_cfg`).
-- **`ol_macro('listener')` при Variable `{enabled: true, spark_conf: {"spark.extraListeners": "com.example.X"}}`,
-  `_resolve_local("spark.extraListeners")` = `None` → `"com.example.X"` + info «подмешан».**
-- **`ol_macro('listener')` при Variable без `spark.extraListeners`,
-  `_resolve_local("spark.extraListeners")` = `"com.example.A,com.example.B"` → `"com.example.A,com.example.B"`
-  + info «без изменений».** Инвариант 16 (DAG-listener'ы не затираются).
-- **`ol_macro('listener')` при Variable с `spark.extraListeners = "io.openlineage..."`,
-  `_resolve_local("spark.extraListeners")` = `"com.example.A,com.example.B"` →
-  `"com.example.A,com.example.B,io.openlineage..."` + info «мердж: …».** Инвариант 16.
-- **`ol_macro('listener')` при Variable с `spark.extraListeners = "com.example.A"`,
-  `_resolve_local("spark.extraListeners")` = `"com.example.A,com.example.B"` →
-  `"com.example.A,com.example.B"` + info «мердж: …»** (OL-listener уже в DAG-CSV → дедуп, не дублируется).
-- **`ol_macro('listener')` при Variable без `spark.extraListeners`,
-  `_resolve_local("spark.extraListeners")` = `None` → `""`** (без лога — обычное отсутствие).
+Ветка `listener` — по трём каналам `dag_cur`:
+
+- **`dag_cur=""`** (DAG ключ не задавал), Variable `spark.extraListeners = "com.example.X"`
+  → `"com.example.X"` + info «подмешан». Разделителя нет.
+- **`dag_cur="com.example.A,com.example.B"`** (безопасный литерал), Variable
+  `spark.extraListeners = "io.openlineage..."` → `"com.example.A,com.example.B,io.openlineage..."`
+  + info «мердж: …». Инвариант 16.
+- **`dag_cur="com.example.A,com.example.B"`**, Variable `spark.extraListeners = "com.example.A"`
+  → `"com.example.A,com.example.B"` — дедуп, класс не дублируется. Защита от двух инстансов
+  одного листенера.
+- **`dag_cur=None`** (DAG-значение со своей Jinja осталось слева) → `",io.openlineage..."`
+  — с ведущей запятой + info «дедуп невозможен».
+- **Variable без `spark.extraListeners`** → `""` + warning «listener не подмешан», при любом
+  канале.
+- **`_dag_channel` (парс)**: `""`/`None`/пробелы → `("", "")`; `"a.jar,b.jar"` → `("", "a.jar,b.jar")`;
+  `"{{ params.x }}"` → `("{{ params.x }}", None)`; `"it's.jar"` → `("it's.jar", None)`
+  (кавычка сломала бы литерал в тексте вызова макроса).
 - **`ol_macro('url')` при Variable с `spark.openlineage.transport.url = "   "` (пробелы) → `""` + warning.**
 - **`ol_macro('url')` при Variable с `spark.openlineage.transport.url = 5000` (число) → `""` + warning.**
 - **`ol_macro('url')` при Variable с `spark.openlineage.transport.url = "marquez:5000"` (без схемы) → `""` + warning.**
 - **`ol_macro('namespace')` при Variable с `spark.openlineage.namespace = "   "` → `""` + warning.**
-- **`ol_macro('listener', dag_cur="dag.X")` при Variable с
-  `spark.extraListeners = "ol.Y"` → возвращает `"ol.Y"` + info-лог с обоими значениями**.
-  Инвариант 13.
-- **`ol_macro('jar')` при Variable с `openlineage_jar = "hdfs://..."` и probe `True`,
-  `_resolve_local("jars")` = `"a.jar"` → `"a.jar,<openlineage-jar>"`.** Инвариант 14.
-- **`ol_macro('jar')` при Variable с `openlineage_jar = "hdfs://..."` и probe `True`,
-  `_resolve_local("jars")` = `None` → `"<openlineage-jar>"`.**
+- **`ol_macro('url', none, 'http://dag-marquez:5000')` при Variable с
+  `spark.openlineage.transport.url = "http://marquez:5000"` → возвращает значение из Variable
+  + info-лог с обоими значениями.** Инвариант 13: OL побеждает, DAG-значение только в логе.
+- **Тексты причин попарно различимы.** Тест прогоняет сценарии отказа (нет Variable, битый
+  JSON, не объект, негодная форма, неполная Variable, дедлайн зонда, нет эндпоинтов, все
+  standby, эндпоинты недоступны) и сравнивает **фактические записи `caplog`** на попарную
+  различимость. Констант `_MSG_*` нет — сравнивается вывод, а не список литералов.
+- **`ol_macro('jar', none, 'a.jar')`** при валидном `openlineage_jar` и probe `True` →
+  `"a.jar,<openlineage-jar>"`. Инвариант 14.
+- **`ol_macro('jar', none, '')`** при probe `True` → `"<openlineage-jar>"`, без разделителя.
+- **`ol_macro('jar', none, none)`** при probe `True` → `",<openlineage-jar>"`, с ведущей запятой.
 - **`ol_macro('jar')` при Variable с `openlineage_jar = ""` → `""` + warning «не задано».**
 - **`ol_macro('jar')` при Variable с `openlineage_jar = "/opt/x.jar"` (без схемы) → `""` + warning «без схемы».**
 - **`ol_macro('jar')` при Variable с `openlineage_jar` валидным и probe `False` → `""` + warning «не подтверждён в HDFS».**
@@ -626,15 +707,22 @@ print(json.dumps({
   (мемо `_jar_memo`).
 - **`ol_macro` при Variable валидной пишет info-лог на каждом вызове.** Инвариант 15: ни одна
   ветка не молчит.
-- **`inject_openlineage` НЕ пишет в атрибут `jars` оператора.** Проверка: `getattr(task, attrs.jars)`
-  до и после равны. Проверяется на обеих раскладках атрибутов (4.1.1 и 4.10.0).
-- **`inject_openlineage` НЕ пишет в `conf`.** Проверка: `getattr(task, attrs.conf)` до и после равны.
-- **`inject_openlineage` НЕ читает `OPENLINEAGE_JAR` env.** Проверка: `os.environ` без этого ключа,
-  `inject_openlineage` не бросает и только регистрирует макрос.
-- **`inject_openlineage` НЕ читает Variable.** Дубль `Variable.get` валит тест при вызове; полный
-  прогон `inject_openlineage` по обеим раскладкам не трогает его.
-- **`inject_openlineage` НЕ вызывает `jar_available` / `urlopen`.** Дубль `urlopen` валит тест при
-  вызове; полный прогон — не вызывает. Probe зовётся только из `_resolve_jar` на рендере.
+- **`inject_openlineage` пишет в `conf` и в атрибут `jars` — только строки с вызовом макроса.**
+  Проверка на обеих раскладках атрибутов (4.1.1 и 4.10.0): после инъекции
+  `conf["spark.openlineage.transport.url"]` содержит `{{ __openlineage_v1('url'`, а атрибут
+  `jars` заканчивается вызовом макроса. Ни одно значение из Variable в conf на парсе не
+  попадает.
+- **`inject_openlineage` НЕ читает Variable.** `Variable.get` подменён на `pytest.fail`;
+  полный прогон по обеим раскладкам его не трогает.
+- **`inject_openlineage` НЕ ходит в сеть.** `urlopen` и `jar_available` подменены на
+  `pytest.fail`. Probe зовётся только из `_resolve_jar` на рендере.
+- **`inject_openlineage` НЕ читает `OPENLINEAGE_JAR` env.** Ключ удалён из `os.environ`,
+  инъекция проходит полностью.
+- **Инвариант 17: никаких висячих запятых.** DAG задал `jars="a.jar"`, Variable выключена
+  (`enabled: false`) → отрендеренный атрибут `jars` равен ровно `"a.jar"`, без хвостовой
+  запятой. То же для `spark.extraListeners`.
+- **Инвариант 14: итог jar-мерджа не уезжает в `conf["spark.jars"]`.** DAG задал
+  `conf["spark.jars"]="a.jar"` → после рендера `a.jar` присутствует в атрибуте `jars`.
 - **Полный RED-набор предка** с обновлённой таблицей истинности §4.5 — все строки проходят с
   новыми полями Variable.
 - **Сидинг `start-airflow.sh`** строит JSON → `Variable.get` + `json.loads` → `dict` с полями
@@ -653,14 +741,14 @@ print(json.dumps({
 
 | Файл | Изменение |
 | --- | --- |
-| `airflow/config/ol_policy/__init__.py` | `inject_openlineage` пишет **только** макрос — `conf` и `jars` не трогает; `ol_macro` принимает четыре `field` (`listener`, `url`, `namespace`, `jar`) и зовёт `_resolve_jar` для `jar` или валидирует поле `spark_conf` для остальных; для `listener` — мердж через `_render_listener_merge` (вызывает `merge_listeners`); новая функция `_validate_cfg` агрегирует недостающие поля в один warning на процесс; новая функция `_render_jar_merge` вызывает `merge_jars` через `_resolve_local`; новая функция `_render_listener_merge` вызывает `merge_listeners` через `_resolve_local`; новая функция `_resolve_local` читает Jinja template_local; `warn_once`-ы заменены на `logger.warning`/`logger.info` (инвариант 15); константа `LISTENER` удалена |
+| `airflow/config/ol_policy/__init__.py` | `inject_openlineage` регистрирует макрос **и** пишет строки в `conf` + атрибут `jars`, не читая Variable/HDFS; уходят чтение `OPENLINEAGE_JAR`, `jar_path`/`jar_available` на парсе, `ol_conf_template`, `foreign_listener`, `_OUR_LISTENERS`, константа `LISTENER`; новые `_dag_channel`, `_macro_call` (парс) и `_emit` (рендер); `_validate_cfg()` — zero-arg под `lru_cache(maxsize=1)`, агрегирует недостающие поля в один warning на процесс; `_resolve_jar(cfg, dag_cur)` зовёт probe на рендере; `ol_macro(field, forced, dag_cur)` на четыре `field`; `reset_state` дополнительно сбрасывает `_passthrough_cache`; тексты сообщений остаются inline |
 | `airflow/config/ol_policy/logger.py` | без изменений (механизм `warn_once` остаётся для других мест, если они появятся) |
 | `airflow/config/ol_policy/utils.py` | новая функция `merge_listeners(dag_cur, our_listener)`: сплит по запятой (с Jinja-сохранением, как в `_jar_items`), дедуп, порядок: DAG-listener'ы первыми, наш последним; `merge_jars` без изменений |
 | `airflow/scripts/start-airflow.sh` | сборка JSON упрощается: `url`/`namespace`/`openlineage_jar` берутся как литералы (больше не из ENV); `OPENLINEAGE_*` ENV-переменные удалены из heredoc |
 | `env_example` | строки `OPENLINEAGE_URL`, `OPENLINEAGE_NAMESPACE`, `OPENLINEAGE_JAR` удалены; комментарий к `OPENLINEAGE_CONFIG_RESEED` уточнён |
 | `docker-compose.yml` | ключи `environment.airflow.OPENLINEAGE_URL/NAMESPACE/JAR` удалены; `OPENLINEAGE_CONFIG_RESEED=false` остаётся |
 | `airflow/config/tests/test_ol_policy.py` | новые тесты §9; удалены тесты `OPENLINEAGE_JAR env`-зависимости (фикстура `jar_env` остаётся только для тех, которые проверяют отсутствие чтения env); таблица истинности §4.5 — все строки; тесты на `_validate_cfg` (один warning, один вызов на процесс); тесты на `_render_jar_merge` (мердж с `a.jar`); тесты на инвариант 13 (OL побеждает DAG-conf + info-лог) |
-| `airflow/config/tests/conftest.py` | без изменений; `reset_state()` сбрасывает `_jar_memo`, `_cfg`, `_warned` (как сегодня) |
+| `airflow/config/tests/conftest.py` | без изменений; фикстура `_reset_policy_state` зовёт `reset_state()`, который теперь сбрасывает ещё `_validate_cfg` и `_passthrough_cache` |
 | `README.md`, `tests/README.md` | формат Variable обновлён; тумблер — без изменений; раздел «Listener» — разъяснён (Variable owns); раздел «Merger» — добавлен (инвариант 14) |
 | `airflow/Dockerfile` | без изменений |
 | `CHANGELOG.md` | одна запись: «cycle 1: Variable хранит `spark_conf` и `openlineage_jar`; OL побеждает DAG-conf по lineage-ключам; jar мерджится через `merge_jars`; ноль silent-веток; probe сдвинут с парса на рендер» |
@@ -682,10 +770,17 @@ print(json.dumps({
 - **`apache-airflow-providers-openlineage` 1.11.0** в облачной среде — конкурирующий писатель
   в conf не обнаружен (проверено в предке §2). Если в будущей версии появится — поведение
   не наша забота, см. §11 предка.
-- **Не перепроверено для 2.10.2:** поведение `SandboxedEnvironment` для `merge_jars` через
-  `_render_jar_merge` — `get_template_env` строится на каждый рендер (`cache_size: 0`), макрос
-  callable. Риск минимальный, проверяется юнит-тестом `test-render-jar-merge-jinja` на
-  `DAG.get_template_env()`.
+- **Дедуп невозможен, когда DAG-значение содержит свою Jinja.** Канал `dag_cur=None`
+  отдаёт значение с ведущей запятой, не зная, что уже стоит слева. DAG, который положил
+  `{{ … }}` в `spark.extraListeners` и получил из него OL-класс, получит его дважды —
+  два инстанса листенера и дублирующиеся события. Парс пишет warning; на стенде
+  DAG-listener'ы задаются литералами, поэтому канал `None` практически не задействован.
+- **Кавычка в DAG-значении отправляет его в канал `None`.** `_dag_channel` считает
+  небезопасными `{{`, `{%`, `'`, `"` — литерал вставляется в текст вызова макроса в
+  одинарных кавычках, и кавычка внутри сломала бы шаблон. Цена — потеря дедупа, не поломка.
+- **Порядок рендера `conf` и `jars` не важен.** Оба — независимые `template_fields`, и ни
+  один макрос не читает результат другого: всё, что нужно, передано аргументами на парсе.
+  Это прямое следствие отказа от `_resolve_local`/`pass_context`.
 - **`spark.extraListeners` и пробелы / формат.** Spark сплитит по запятой через `Utils.stringToSeq`
   (грounding §2), фильтрует пустые и пробельные. `merge_listeners` тоже фильтрует и сплитит
   по запятой, но **сохраняет пробелы внутри токенов** — на стенде классы без пробелов,
@@ -695,7 +790,24 @@ print(json.dumps({
 
 ## 12. Журнал ревизий
 
-### Ревизия 2 (cycle 1 — эта)
+### Ревизия 3 (cycle 1 — эта, 2026-07-31)
+
+Ревизия 2 была реализована на 8 коммитов и **откачена** (`git reset --hard 243389b`, коммиты
+сохранены на ветке `backup/ol-cycle1-2026-07-31`). Причина — два дефекта самой спеки,
+обнаруженные проверкой фактов на живой Airflow 2.6.3.
+
+| Было (Ревизия 2) | Стало (Ревизия 3) | Почему |
+| --- | --- | --- |
+| `_resolve_local` читает текущее DAG-значение через `airflow.plugins_manager.get_template_locals` | **`_resolve_local` удалена.** DAG-значение передаёт парс — параметром `dag_cur` тремя каналами (`""` / литерал / `None`) | API не существует: `hasattr(airflow.plugins_manager, "get_template_locals") is False` на 2.6.3. В проде функция всегда возвращала бы `None`: мердж listener'ов выродился бы в OL-only, `spark.jars` DAG'а был бы затёрт. Тесты не ловили — монкипатчили саму функцию |
+| `inject_openlineage` регистрирует **только** макрос, `conf`/`jars` не трогает | `inject_openlineage` регистрирует макрос **и** пишет строки в `conf` и атрибут `jars` | иначе макросу неоткуда взяться: лайнидж работал бы только у DAG'ов, вписавших `{{ __openlineage_v1(…) }}` руками — против цели «без правок в DAG'ах» |
+| Итог `merge_jars` пишется в `conf["spark.jars"]`, атрибут `jars` не трогается | Итог пишется в **атрибут `jars`** | `Option(jars).orElse(sparkProperties.get(JARS.key))`: при заданном DAG'ом `jars=` Spark `spark.jars` не смотрит — наш jar не приехал бы |
+| «OL побеждает через порядок рендера Jinja» | OL побеждает **порядком ключей на парсе**: наши ключи пишутся после `**cur_conf` | порядок рендера ничего не решает: если DAG положил литерал, рендерить нечего |
+| `_validate_cfg(cfg: dict)` под `lru_cache(maxsize=1)` | `_validate_cfg()` без аргументов, сама зовёт `_cfg()` | `lru_cache` хэширует аргументы; dict нехэшируем — `TypeError` на первом вызове |
+| Тексты предупреждений вынесены в константы `_MSG_*` | Тексты **inline**; различимость проверяется по фактическому `caplog` | константы существовали только ради тестов; дедуп `warn_once` опирается на ключ-кортеж, не на текст |
+| `reset_state()` сбрасывает `_warned`, `_cfg`, `_jar_memo` | плюс `_validate_cfg` и **`_passthrough_cache`** | без сброса `_passthrough_cache` sys.modules-заглушки тестов дают 7 порядко-зависимых падений `test_passthrough_*` |
+| — | Новый **инвариант 17**: разделитель принадлежит макросу | сборка на парсе иначе даёт `"a.jar,"` при выключенном lineage |
+
+### Ревизия 2 (cycle 1 — предыдущая)
 
 Жёсткие правила пользователя внесены в §4–§8.
 
