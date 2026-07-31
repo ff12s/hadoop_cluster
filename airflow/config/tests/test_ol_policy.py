@@ -1003,14 +1003,12 @@ def test_cfg_returns_dict(variable: Callable[..., SimpleNamespace]) -> None:
     }
 
 
-def test_cfg_returns_empty_dict_for_empty_object(
-    variable: Callable[..., SimpleNamespace], caplog: pytest.LogCaptureFixture
-) -> None:
-    """Пустой объект — легальное значение, а не сентинел отказа."""
+def test_cfg_rejects_empty_object(variable: Callable[..., SimpleNamespace], caplog: pytest.LogCaptureFixture) -> None:
+    """Пустой JSON-объект — не годная форма Variable."""
     variable(raw="{}")
 
     assert ol_policy._cfg() is None
-    assert any("spark_conf" in m for m in warnings_of(caplog))
+    assert any("enabled (bool)" in message for message in warnings_of(caplog))
 
 
 def test_cfg_rejects_old_shape(variable: Callable[..., SimpleNamespace], caplog: pytest.LogCaptureFixture) -> None:

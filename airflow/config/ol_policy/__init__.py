@@ -247,6 +247,20 @@ def _cfg() -> dict[str, object] | None:
         return None
     if "auth" in parsed:
         logger.warn_once(("auth",), "OpenLineage: ключ 'auth' в Variable не поддерживается и не подставляется")
+    # Форма проверяется здесь, содержимое полей — в _validate_cfg: тут решается,
+    # тот ли это документ вообще, там — годится ли он для включения лайниджа.
+    shape_ok = (
+        isinstance(parsed.get("enabled"), bool)
+        and isinstance(parsed.get("spark_conf"), dict)
+        and isinstance(parsed.get("openlineage_jar"), str)
+    )
+    if not shape_ok:
+        logger.warn_once(
+            ("bad-shape",),
+            "OpenLineage выключен: Variable openlineage_config должна иметь ключи "
+            "enabled (bool), spark_conf (object), openlineage_jar (str)",
+        )
+        return None
     return parsed
 
 
