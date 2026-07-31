@@ -20,6 +20,36 @@ printf '%s\n%s\n' "${admin_password}" "${admin_password}" | airflow users create
     --role Admin \
     --email admin@example.com
 
+# Конфиг OpenLineage живёт в Variable openlineage_config и правится в
+# Admin -> Variables без рестарта контейнера. Сидинг идемпотентный: существующую
+# переменную не трогаем, иначе правка через UI не пережила бы перезапуск.
+# Перезаписать дефолтами можно только явным OPENLINEAGE_CONFIG_RESEED=true.
+echo "[init] сидим Variable openlineage_config"
+ol_config_json="$(python - <<'PY'
+import json
+
+print(json.dumps({
+    "enabled": True,
+    "spark_conf": {
+        "spark.extraListeners": "io.openlineage.spark.agent.OpenLineageSparkListener",
+        "spark.openlineage.transport.type": "http",
+        "spark.openlineage.transport.url": "http://marquez:5000",
+        "spark.openlineage.namespace": "hadoop-cluster",
+        "spark.openlineage.columnLineage.datasetLineageEnabled": "true",
+    },
+    "openlineage_jar": "hdfs://namenode:9000/opt/openlineage/openlineage-spark_2.13-1.46.0.jar",
+}))
+PY
+)"
+
+# БЕЗ --json: этот флаг означает «сериализовать значение», а не «значение уже
+# JSON». С ним строка закодировалась бы второй раз, и политика читала бы str
+# вместо объекта — лайнидж выключился бы молча.
+if [ "${OPENLINEAGE_CONFIG_RESEED:-false}" = "true" ] \
+   || ! airflow variables get openlineage_config >/dev/null 2>&1; then
+    airflow variables set openlineage_config "${ol_config_json}"
+fi
+
 echo "[init] готово, запускаем процессы"
 
 # Креды суперпользователя Postgres и пароль админа UI нужны только для разовой
