@@ -385,13 +385,15 @@ def _resolve_jar(cfg: dict[str, object], dag_cur: str | None) -> str:
 
     :param cfg: разобранный конфиг из ``_validate_cfg``.
     :param dag_cur: канал DAG-значения jar'ов, выбранный парсом.
-    :return: строка для подстановки в атрибут ``jars``; "" при любом отказе.
+    :return: строка для подстановки в атрибут ``jars``; при любом отказе —
+        собственное значение DAG'а (``dag_cur``, когда это строка, иначе ""), а не
+        пустая строка: отсутствующий в HDFS jar не должен стирать чужой ``jars=``.
     """
     jar_uri_obj = cfg.get("openlineage_jar")
     jar_uri = jar_uri_obj.strip() if isinstance(jar_uri_obj, str) else ""
     if not jar_uri:
         logger.warn_once(("jar-unset",), "OpenLineage не включён: openlineage_jar в Variable не задан")
-        return ""
+        return _refusal(dag_cur)
     path = jar_path(jar_uri)
     if path is None:
         logger.warn_once(
@@ -399,7 +401,7 @@ def _resolve_jar(cfg: dict[str, object], dag_cur: str | None) -> str:
             "OpenLineage не включён: openlineage_jar задан без схемы или без пути (%s)",
             jar_uri,
         )
-        return ""
+        return _refusal(dag_cur)
     if not jar_available(jar_uri, path):
         logger.warn_once(
             ("jar-absent",),
@@ -407,7 +409,7 @@ def _resolve_jar(cfg: dict[str, object], dag_cur: str | None) -> str:
             "Залейте его: scripts/seed-openlineage-jar.bat",
             jar_uri,
         )
-        return ""
+        return _refusal(dag_cur)
     return _emit(jar_uri, dag_cur, _merge_jars_pair, "spark.jars")
 
 

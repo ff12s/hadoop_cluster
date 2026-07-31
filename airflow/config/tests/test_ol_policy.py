@@ -1497,15 +1497,43 @@ def test_macro_jar_prefixes_comma_for_jinja_channel(
     assert ol_policy.ol_macro("jar", None, None) == ",hdfs://namenode:9000/o.jar"
 
 
-def test_macro_jar_empty_when_probe_says_no(
+def test_macro_jar_absent_keeps_dag_jars(
     variable: Callable[..., SimpleNamespace], monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """Probe не подтвердил jar — пустая строка и warning, DAG-jar'ы не тронуты."""
+    """Probe не подтвердил jar — наш jar не подмешан, но DAG-jar на литеральном канале выживает."""
     _variable_full(variable)
     monkeypatch.setattr(ol_policy, "jar_available", lambda jar_uri, path: False)
 
-    assert ol_policy.ol_macro("jar", None, "a.jar") == ""
+    assert ol_policy.ol_macro("jar", None, "a.jar") == "a.jar"
     assert any("HDFS" in message for message in warnings_of(caplog))
+
+
+def test_macro_jar_absent_keeps_empty_dag_channel_empty(
+    variable: Callable[..., SimpleNamespace], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Probe не подтвердил jar, канал '' (DAG молчал): по-прежнему пустая строка, не регрессия."""
+    _variable_full(variable)
+    monkeypatch.setattr(ol_policy, "jar_available", lambda jar_uri, path: False)
+
+    assert ol_policy.ol_macro("jar", None, "") == ""
+
+
+def test_macro_jar_malformed_uri_keeps_dag_jars(
+    variable: Callable[..., SimpleNamespace], caplog: pytest.LogCaptureFixture
+) -> None:
+    """``openlineage_jar`` без схемы — наш jar не подмешан, DAG-jar на литеральном канале выживает."""
+    variable(raw=json.dumps({
+        "enabled": True,
+        "spark_conf": {
+            "spark.extraListeners": "io.ol.L",
+            "spark.openlineage.transport.url": "http://marquez:5000",
+            "spark.openlineage.namespace": "ns",
+        },
+        "openlineage_jar": "/opt/openlineage/o.jar",
+    }))
+
+    assert ol_policy.ol_macro("jar", None, "a.jar") == "a.jar"
+    assert any("без схемы" in message for message in warnings_of(caplog))
 
 
 def test_macro_jar_rejects_uri_without_scheme(
