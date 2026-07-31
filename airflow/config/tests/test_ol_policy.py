@@ -1013,6 +1013,16 @@ def test_cfg_rejects_old_shape(variable: Callable[..., SimpleNamespace], caplog:
     assert any("openlineage_jar" in message for message in messages)
 
 
+def test_cfg_returns_empty_dict_for_empty_object(
+    variable: Callable[..., SimpleNamespace], caplog: pytest.LogCaptureFixture
+) -> None:
+    """Пустой объект — легальное значение, а не сентинел отказа."""
+    variable(raw="{}")
+
+    assert ol_policy._cfg() is None
+    assert any("spark_conf" in m for m in warnings_of(caplog))
+
+
 @pytest.mark.parametrize(
     ("raw", "error", "marker"),
     [
