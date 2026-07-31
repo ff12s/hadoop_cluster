@@ -4,8 +4,9 @@ OL-листенер вынесен из общего ``spark-defaults.conf`` (о
 ``spark-shell``), поэтому Airflow навешивает лайнидж своим ``SparkSubmitOperator``
 сам — без правок в DAG'ах.
 
-Пакет разложен по фазам жизненного цикла политики: ``parse`` собирает строки на
-разборе DAG-файла, ``render`` резолвит значения на воркере, ``variable`` читает
+Пакет разложен по фазам жизненного цикла политики: ``parse`` на разборе DAG-файла
+дописывает колбэк лайниджа в ``on_execute_callback`` таски, ``callback`` резолвит
+значения и пишет conf/jars на воркере перед ``execute()``, ``variable`` читает
 Airflow Variable, ``probe`` ходит в HDFS, ``operator`` знает про две раскладки
 провайдера. Здесь остаётся только точка входа и общий сброс состояния.
 
@@ -19,11 +20,11 @@ from __future__ import annotations
 # Подмодули импортируются целиком ради путей ``ol_policy.<module>``: подменять
 # поведение нужно у модуля-владельца, потому что вызов внутри него идёт через его
 # собственный глобал. Символьные реэкспорты ниже — read-only алиасы.
-from . import logger, operator, parse, probe, render, utils, variable  # noqa: F401
+from . import callback, logger, operator, parse, probe, utils, variable  # noqa: F401
+from .callback import ol_execute_callback
 from .operator import lineage_forced, operator_attrs, passthrough_exceptions
-from .parse import MACRO, inject_openlineage
+from .parse import inject_openlineage
 from .probe import jar_available, jar_path
-from .render import ol_macro
 
 __all__ = [
     "apply_policy",
@@ -31,11 +32,10 @@ __all__ = [
     "jar_available",
     "jar_path",
     "inject_openlineage",
-    "ol_macro",
+    "ol_execute_callback",
     "operator_attrs",
     "lineage_forced",
     "passthrough_exceptions",
-    "MACRO",
     "merge_csv",
 ]
 

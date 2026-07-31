@@ -51,6 +51,7 @@ class PrivateLayoutOperator:
         self._conf = conf
         self._jars = jars
         self.params = {} if params is None else params
+        self.on_execute_callback: object | None = None
 
 
 class PublicLayoutOperator:
@@ -81,6 +82,7 @@ class PublicLayoutOperator:
         self.conf = conf
         self.jars = jars
         self.params = {} if params is None else params
+        self.on_execute_callback: object | None = None
 
 
 class DummyDag:
