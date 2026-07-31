@@ -1003,16 +1003,6 @@ def test_cfg_returns_dict(variable: Callable[..., SimpleNamespace]) -> None:
     }
 
 
-def test_cfg_rejects_old_shape(variable: Callable[..., SimpleNamespace], caplog: pytest.LogCaptureFixture) -> None:
-    """Старый формат Variable ({enabled, url, namespace}) — не валиден."""
-    variable(raw='{"enabled": true, "url": "http://marquez:5000", "namespace": "ns"}')
-
-    assert ol_policy._cfg() is None
-    messages = warnings_of(caplog)
-    assert any("spark_conf" in message for message in messages)
-    assert any("openlineage_jar" in message for message in messages)
-
-
 def test_cfg_returns_empty_dict_for_empty_object(
     variable: Callable[..., SimpleNamespace], caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -1021,6 +1011,16 @@ def test_cfg_returns_empty_dict_for_empty_object(
 
     assert ol_policy._cfg() is None
     assert any("spark_conf" in m for m in warnings_of(caplog))
+
+
+def test_cfg_rejects_old_shape(variable: Callable[..., SimpleNamespace], caplog: pytest.LogCaptureFixture) -> None:
+    """Старый формат Variable ({enabled, url, namespace}) — не валиден."""
+    variable(raw='{"enabled": true, "url": "http://marquez:5000", "namespace": "ns"}')
+
+    assert ol_policy._cfg() is None
+    messages = warnings_of(caplog)
+    assert any("spark_conf" in message for message in messages)
+    assert any("openlineage_jar" in message for message in messages)
 
 
 @pytest.mark.parametrize(
