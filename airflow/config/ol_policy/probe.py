@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 import json
 import threading
+import time
 from typing import Literal
 from urllib.error import HTTPError
 from urllib.parse import quote, urlparse
@@ -22,19 +23,27 @@ from .logger import warn_once
 # Исход опроса одного эндпоинта WebHDFS.
 _Outcome = Literal["found", "absent", "standby", "error"]
 
+# Исход целого зонда: down — кластер не дал авторитетного ответа ни на одном проходе.
+_ProbeOutcome = Literal["found", "absent", "down"]
+
 # Ограничители зонда: дедлайн на весь перебор, таймаут одного эндпоинта, TTL мемо.
 # Модульные, потому что тесты подменяют их monkeypatch'ем.
 _PROBE_DEADLINE_SEC = 5.0
 ENDPOINT_TIMEOUT_SEC = 2.0
 _MEMO_TTL_SEC = 300.0
+_MEMO_ERROR_TTL_SEC = 30.0
+_RETRY_PAUSE_SEC = 0.5
 
 # Ре-экспорты ради тестов: ``monkeypatch.setattr(probe, ...)`` должен попадать в
 # символ, который читает этот модуль, а не в модуль-владелец.
 _now = utils.now
 resolve_webhdfs_urls = hadoop_conf.resolve_webhdfs_urls
+_sleep = time.sleep
 
-# Мемо зонда: jar_uri -> (available, timestamp). Время — по ``_now``.
-_jar_memo: dict[str, tuple[bool, float]] = {}
+# Мемо зонда: jar_uri -> (available, timestamp, ttl). Ошибочные исходы живут
+# _MEMO_ERROR_TTL_SEC, авторитетные — _MEMO_TTL_SEC: восстановление кластера
+# подхватывается быстро, а поток тасок не долбит мёртвый кластер.
+_jar_memo: dict[str, tuple[bool, float, float]] = {}
 
 
 def jar_path(jar_uri: str) -> str | None:
@@ -137,36 +146,40 @@ def _query_endpoint(endpoint: str, path: str) -> _Outcome:
         return "error"
 
 
-def _probe(path: str) -> bool:
-    """Перебирает эндпоинты WebHDFS до первого осмысленного ответа.
+def _probe(path: str) -> _ProbeOutcome:
+    """Перебирает эндпоинты WebHDFS, при сплошных отказах — второй проход.
 
-    Standby-NameNode — не отказ, а «спроси активный». Молчаливым остаётся ровно
-    один исход: 404, то есть кластер ответил и jar'а действительно нет.
+    Ретрай один: транзиентная ошибка сети или сплошные standby на первом
+    проходе не должны выключать лайнидж на весь TTL мемо. Авторитетные ответы
+    (200/404) терминальны сразу.
 
     :param path: абсолютный путь jar'а в HDFS.
-    :return: True, если jar есть; False, если его нет либо ни один эндпоинт не ответил.
+    :return: "found", "absent" либо "down" — ни один эндпоинт не ответил.
     :raises handlers.NoEndpointsError: резолвер не дал ни одного эндпоинта.
     """
     endpoints = resolve_webhdfs_urls()
     if not endpoints:
         raise handlers.NoEndpointsError(hadoop_conf.hadoop_conf_dir())
     standby_only = True
-    for endpoint in endpoints:
-        outcome = _query_endpoint(endpoint, path)
-        if outcome == "found":
-            return True
-        if outcome == "absent":
-            return False
-        if outcome != "standby":
-            standby_only = False
+    for attempt in range(2):
+        if attempt:
+            _sleep(_RETRY_PAUSE_SEC)
+        for endpoint in endpoints:
+            outcome = _query_endpoint(endpoint, path)
+            if outcome == "found":
+                return "found"
+            if outcome == "absent":
+                return "absent"
+            if outcome != "standby":
+                standby_only = False
     if standby_only:
         warn_once(("all-standby",), "OpenLineage не включён: все NameNode ответили standby (%s)", path)
     else:
         warn_once(("endpoints-down",), "OpenLineage не включён: эндпоинты WebHDFS недоступны (%s)", path)
-    return False
+    return "down"
 
 
-def _probe_worker(path: str, slot: list[bool | BaseException]) -> None:
+def _probe_worker(path: str, slot: list[_ProbeOutcome | BaseException]) -> None:
     """Тело демон-потока зонда: кладёт в слот результат либо исключение.
 
     :param path: абсолютный путь jar'а в HDFS.
@@ -187,9 +200,12 @@ def jar_available(jar_uri: str, path: str) -> bool:
     таски на воркере. Результат брошенного потока отбрасывается — мемо пишет
     ожидающая сторона, иначе две таски одного файла получили бы разные ответы.
 
-    Мемо по ``jar_uri`` с TTL ``_MEMO_TTL_SEC``: поток тасок, который ходит за
-    jar'ом с предсказуемым путём, не должен перегаживать кластер. Поток, доехавший
-    после дедлайна, мемо не переписывает — поздняя запись потеряла бы актуальность.
+    Мемо по ``jar_uri`` с TTL, зависящим от исхода: авторитетные ответы
+    (``found``/``absent``) живут ``_MEMO_TTL_SEC``, а любой неавторитетный исход
+    (дедлайн, исключение, ``down``) — ``_MEMO_ERROR_TTL_SEC``: восстановление
+    кластера подхватывается быстро, а поток тасок не долбит мёртвый кластер.
+    Поток, доехавший после дедлайна, мемо не переписывает — поздняя запись
+    потеряла бы актуальность.
 
     :param jar_uri: значение поля ``openlineage_jar``; оно же ключ мемо.
     :param path: разобранный путь jar'а для WebHDFS.
@@ -197,18 +213,19 @@ def jar_available(jar_uri: str, path: str) -> bool:
     """
     cached = _jar_memo.get(jar_uri)
     if cached is not None:
-        value, stamped = cached
-        if _now() - stamped < _MEMO_TTL_SEC:
+        value, stamped, ttl = cached
+        if _now() - stamped < ttl:
             return value
         _jar_memo.pop(jar_uri, None)
 
-    slot: list[bool | BaseException] = []
+    slot: list[_ProbeOutcome | BaseException] = []
     worker = threading.Thread(target=_probe_worker, args=(path, slot), daemon=True, name="openlineage-jar-probe")
     worker.start()
     worker.join(_PROBE_DEADLINE_SEC)
 
     if not slot:
         available = False
+        ttl = _MEMO_ERROR_TTL_SEC
         warn_once(
             ("probe-deadline",),
             "OpenLineage не включён: зонд jar не уложился в дедлайн %s с (%s)",
@@ -219,6 +236,7 @@ def jar_available(jar_uri: str, path: str) -> bool:
         outcome = slot[0]
         if isinstance(outcome, BaseException):
             available = False
+            ttl = _MEMO_ERROR_TTL_SEC
             if isinstance(outcome, handlers.NoEndpointsError):
                 warn_once(
                     ("no-endpoints",),
@@ -232,8 +250,15 @@ def jar_available(jar_uri: str, path: str) -> bool:
                     jar_uri,
                     outcome,
                 )
+        elif outcome == "found":
+            available = True
+            ttl = _MEMO_TTL_SEC
+        elif outcome == "absent":
+            available = False
+            ttl = _MEMO_TTL_SEC
         else:
-            available = outcome
+            available = False
+            ttl = _MEMO_ERROR_TTL_SEC
 
-    _jar_memo[jar_uri] = (available, _now())
+    _jar_memo[jar_uri] = (available, _now(), ttl)
     return available

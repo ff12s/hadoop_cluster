@@ -944,6 +944,77 @@ def test_probe_401_then_404_is_absent(
     assert ol_policy.probe._query_endpoint("http://nn1:9870", "/jars/ol.jar") == "absent"
 
 
+def test_probe_retries_endpoints_once_on_transient_errors(
+    endpoints: Callable[[list[str]], None],
+    requests_log: Callable[[Callable[[object], object]], list[object]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Первый проход — сплошные ошибки, второй находит jar: итог found, был sleep."""
+    endpoints(["http://nn1:9870"])
+    pauses: list[float] = []
+    monkeypatch.setattr(ol_policy.probe, "_sleep", pauses.append)
+    attempts: list[object] = []
+
+    def _handler(url: object) -> object:
+        attempts.append(url)
+        if len(attempts) == 1:
+            return OSError("connection refused")
+        return FakeResponse(200)
+
+    requests_log(_handler)
+    assert ol_policy.probe._probe("/jars/ol.jar") == "found"
+    assert len(attempts) == 2
+    assert pauses == [ol_policy.probe._RETRY_PAUSE_SEC]
+
+
+def test_probe_absent_is_terminal_on_first_pass(
+    endpoints: Callable[[list[str]], None],
+    requests_log: Callable[[Callable[[object], object]], list[object]],
+) -> None:
+    """404 авторитетен: второго прохода нет."""
+    endpoints(["http://nn1:9870"])
+    urls = requests_log(lambda url: _http_error(404))
+    assert ol_policy.probe._probe("/jars/ol.jar") == "absent"
+    assert len(urls) == 1
+
+
+def test_probe_down_after_two_passes(
+    endpoints: Callable[[list[str]], None],
+    requests_log: Callable[[Callable[[object], object]], list[object]],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Оба прохода — ошибки: итог down, эндпоинт спрошен дважды, warning один."""
+    endpoints(["http://nn1:9870"])
+    monkeypatch.setattr(ol_policy.probe, "_sleep", lambda seconds: None)
+    urls = requests_log(lambda url: OSError("refused"))
+    assert ol_policy.probe._probe("/jars/ol.jar") == "down"
+    assert len(urls) == 2
+    assert any("недоступны" in message for message in warnings_of(caplog))
+
+
+def test_error_memo_expires_faster_than_found(
+    endpoints: Callable[[list[str]], None],
+    requests_log: Callable[[Callable[[object], object]], list[object]],
+    monkeypatch: pytest.MonkeyPatch,
+    clock: SimpleNamespace,
+) -> None:
+    """Ошибочный исход мемоизируется на _MEMO_ERROR_TTL_SEC, не на _MEMO_TTL_SEC."""
+    endpoints(["http://nn1:9870"])
+    monkeypatch.setattr(ol_policy.probe, "_sleep", lambda seconds: None)
+    calls = requests_log(lambda url: OSError("refused"))
+    assert ol_policy.probe.jar_available("hdfs:///jars/ol.jar", "/jars/ol.jar") is False
+    first = len(calls)
+
+    clock.now += ol_policy.probe._MEMO_ERROR_TTL_SEC - 1
+    assert ol_policy.probe.jar_available("hdfs:///jars/ol.jar", "/jars/ol.jar") is False
+    assert len(calls) == first  # мемо ещё живо
+
+    clock.now += 2
+    ol_policy.probe.jar_available("hdfs:///jars/ol.jar", "/jars/ol.jar")
+    assert len(calls) > first  # протухло — зонд сходил снова
+
+
 def test_probe_memoizes_by_jar_uri(
     endpoints: Callable[[list[str]], None], requests_log: Callable[..., list[str]], clock: SimpleNamespace
 ) -> None:
@@ -1771,14 +1842,14 @@ def test_macro_jar_probes_once_per_uri(
     _variable_full(variable)
     probed: list[str] = []
 
-    def _counting_probe(path: str) -> bool:
+    def _counting_probe(path: str) -> str:
         """Считает походы в HDFS и всегда подтверждает jar.
 
         :param path: путь jar'а внутри HDFS.
-        :return: True.
+        :return: "found".
         """
         probed.append(path)
-        return True
+        return "found"
 
     monkeypatch.setattr(ol_policy.probe, "_probe", _counting_probe)
 
