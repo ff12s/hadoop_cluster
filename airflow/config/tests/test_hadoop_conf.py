@@ -6,7 +6,7 @@ import pathlib
 
 import pytest
 
-import hadoop_conf
+from ol_policy import hadoop_conf
 
 
 def _write_xml(directory: pathlib.Path, filename: str, props: dict[str, str]) -> None:
