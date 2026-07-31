@@ -23,7 +23,7 @@ from urllib.error import HTTPError, URLError
 import pytest
 
 import ol_policy
-from conftest import DummyDag, warnings_of
+from conftest import DummyDag, PublicLayoutOperator, warnings_of
 
 JAR = "hdfs://namenode:9000/opt/openlineage/openlineage-spark_2.13-1.46.0.jar"
 FOREIGN_LISTENER = "com.example.OtherListener"
@@ -2025,5 +2025,78 @@ def test_emit_uses_the_merge_it_was_given() -> None:
     merged = ol_policy._emit("hdfs://n:9000/o.jar", "a.jar", ol_policy._merge_jars_pair, "spark.jars")
 
     assert merged == "a.jar,hdfs://n:9000/o.jar"
+
+
+# ---------------------------------------------------------------------------
+# Сквозные тесты: живой Jinja и различимость причин отказа (Task 10)
+# ---------------------------------------------------------------------------
+
+airflow_dag = pytest.importorskip("airflow.models.dag", reason="нужен установленный Airflow")
+
+
+def test_full_cycle_renders_expected_command_values(
+    variable: Callable[..., SimpleNamespace], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Парс собрал строки, живой Jinja их отрендерил — значения на месте, запятых лишних нет."""
+    _variable_full(variable)
+    monkeypatch.setattr(ol_policy, "jar_available", lambda jar_uri, path: True)
+    dag = airflow_dag.DAG(dag_id="render", schedule=None, start_date=None)
+    task = PublicLayoutOperator(dag=dag, jars="a.jar", conf={"spark.extraListeners": "com.example.A"})
+
+    ol_policy.inject_openlineage(task)
+    env = dag.get_template_env()
+    rendered_conf = {key: env.from_string(value).render() for key, value in task.conf.items()}
+    rendered_jars = env.from_string(task.jars).render()
+
+    assert rendered_conf["spark.extraListeners"] == "com.example.A,io.ol.L"
+    assert rendered_conf["spark.openlineage.transport.url"] == "http://marquez:5000"
+    assert rendered_conf["spark.openlineage.namespace"] == "hadoop-cluster"
+    assert rendered_jars == "a.jar,hdfs://namenode:9000/o.jar"
+
+
+def test_full_cycle_leaves_no_trailing_comma_when_lineage_is_off(
+    variable: Callable[..., SimpleNamespace]
+) -> None:
+    """Инвариант 17: выключённый лайнидж не оставляет висячей запятой."""
+    variable(raw=json.dumps({
+        "enabled": False,
+        "spark_conf": {
+            "spark.extraListeners": "io.ol.L",
+            "spark.openlineage.transport.url": "http://marquez:5000",
+            "spark.openlineage.namespace": "ns",
+        },
+        "openlineage_jar": "hdfs://namenode:9000/o.jar",
+    }))
+    dag = airflow_dag.DAG(dag_id="render_off", schedule=None, start_date=None)
+    task = PublicLayoutOperator(dag=dag, jars="a.jar", conf={"spark.extraListeners": "com.example.A"})
+
+    ol_policy.inject_openlineage(task)
+    env = dag.get_template_env()
+
+    assert env.from_string(task.jars).render() == "a.jar"
+    assert env.from_string(task.conf["spark.extraListeners"]).render() == "com.example.A"
+
+
+def test_failure_reasons_are_pairwise_distinct(
+    variable: Callable[..., SimpleNamespace], caplog: pytest.LogCaptureFixture
+) -> None:
+    """Каждая причина отказа звучит в логе по-своему — иначе расследование слепое."""
+    scenarios: dict[str, object] = {
+        "no-var": None,
+        "bad-json": "{",
+        "not-object": "[1, 2, 3]",
+        "bad-shape": '{"enabled": true}',
+        "var-incomplete": json.dumps({"enabled": True, "spark_conf": {}, "openlineage_jar": ""}),
+    }
+    collected: list[str] = []
+    for raw in scenarios.values():
+        ol_policy.reset_state()
+        caplog.clear()
+        variable(raw=raw)
+        ol_policy.ol_macro("listener")
+        collected.extend(warnings_of(caplog))
+
+    assert len(collected) == len(set(collected)), f"неразличимые тексты: {collected}"
+    assert len(collected) == len(scenarios)
 
 
