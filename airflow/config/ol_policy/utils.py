@@ -66,3 +66,23 @@ def merge_jars(current: object, conf_jars: object, jar: str) -> str:
             if item not in merged:
                 merged.append(item)
     return ",".join(merged)
+
+def merge_listeners(dag_cur: object, our_listener: object) -> str:
+    """Склеивает CSV-лист listener'ов DAG-уровня с классом из Variable.
+
+    Правила те же, что у ``merge_jars``: пустые элементы отбрасываются,
+    значение с Jinja не режется по запятой, порядок сохраняется, дубликаты
+    убираются. DAG-listener'ы идут первыми, наш — последним: дедуп защищает
+    от двух инстансов одного листенера и, как следствие, от дублирующихся
+    событий лайниджа.
+
+    :param dag_cur: значение ``conf["spark.extraListeners"]``, каким его задал DAG.
+    :param our_listener: класс listener'а из ``spark_conf["spark.extraListeners"]``.
+    :return: список классов через запятую; "" если оба источника пусты.
+    """
+    merged: list[str] = []
+    for source in (dag_cur, our_listener):
+        for item in _jar_items(source):
+            if item not in merged:
+                merged.append(item)
+    return ",".join(merged)

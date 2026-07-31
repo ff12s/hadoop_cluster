@@ -566,3 +566,4 @@ def reset_state() -> None:
 
 # Реэкспорт утилит: тесты и вызывающий код обращаются к ним через пакет политики.
 merge_jars = utils.merge_jars
+merge_listeners = utils.merge_listeners
