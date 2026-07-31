@@ -395,7 +395,12 @@ def _validate_cfg() -> dict[str, object] | None:
 - [ ] **Step 5: Прогнать тесты ветки**
 
 Run: `cd airflow/config && python -m pytest tests/test_ol_policy.py -q -k "validate_cfg" --tb=short`
-Expected: PASS обоих.
+Expected: **оба теста остаются красными**, и это правильно. Они доходят до `_validate_cfg` только через `ol_macro`, а `ol_macro` начинает её звать лишь в Task 6. Здесь проверяется другое: тесты падают на утверждениях о поведении, а **не** на `AttributeError: module 'ol_policy' has no attribute '_validate_cfg'` — то есть функция существует и импортируется. Зелёными они станут в Task 6.
+
+Дополнительно убедиться, что функция работает изолированно:
+
+Run: `cd airflow/config && python -c "import sys; sys.path.insert(0, '.'); import ol_policy; print(ol_policy._validate_cfg())"`
+Expected: `None` (Airflow недоступен → `_cfg()` вернул None), без исключения.
 
 - [ ] **Step 6: Commit**
 
@@ -944,8 +949,10 @@ Expected: `AttributeError` на обеих функциях.
 
 ```python
 # Значение с этими фрагментами нельзя вложить литералом в текст вызова макроса:
-# Jinja порвётся на вложенных скобках, кавычка — на самой кавычке.
-_UNSAFE_FOR_LITERAL = ("{{", "{%", "'", '"')
+# Jinja порвётся на вложенных скобках, кавычка — на самой кавычке, а обратный
+# слэш Jinja развернёт как escape внутри строкового литерала ("C:\new.jar"
+# приедет как "C:" + перевод строки + "ew.jar").
+_UNSAFE_FOR_LITERAL = ("{{", "{%", "'", '"', "\\")
 ```
 
 Перед `inject_openlineage` добавить:
