@@ -305,6 +305,21 @@ def _validate_cfg() -> dict[str, object] | None:
     return cfg
 
 
+def _refusal(dag_cur: str | None) -> str:
+    """Значение канала при отказе лайниджа: собственное значение DAG'а не теряется.
+
+    Отказ (форс-выключение, ``enabled: false``, битая или неполная Variable) не
+    должен стирать то, что DAG положил в conf/``jars`` сам, по причинам, не
+    связанным с лайниджем. Канал ``None`` в этом правиле не участвует: текст
+    DAG'а там уже стоит слева от вызова макроса (см. ``_dag_channel``), и
+    подставлять его повторно значило бы задвоить.
+
+    :param dag_cur: канал DAG-значения из ``_dag_channel``.
+    :return: ``dag_cur``, если это строка; иначе "".
+    """
+    return dag_cur if isinstance(dag_cur, str) else ""
+
+
 def _emit(value: str, dag_cur: str | None, merge: Callable[[object, object], str], key: str) -> str:
     """Оформляет наше значение под тот канал, которым парс передал DAG-значение.
 
@@ -407,21 +422,24 @@ def ol_macro(field: str, forced: bool | None = None, dag_cur: str | None = "") -
     :param dag_cur: канал DAG-значения, выбранный парсом. ``""`` — DAG ключ не задавал,
         строка — безопасный литерал, ``None`` — текст DAG'а стоит слева от вызова.
         Для скаляров ``url`` и ``namespace`` — только материал конфликтного лога.
-    :return: значение для подстановки; "" если лайнидж выключен или конфиг негоден.
+    :return: значение для подстановки. Если лайнидж выключен или конфиг негоден —
+        собственное значение DAG'а (``dag_cur``, когда это строка, иначе ""), а не
+        пустая строка: отказ от лайниджа не должен стирать чужой ``spark.jars``
+        или ``spark.extraListeners``.
     """
     if forced is False:
         _logger.info("ol_policy: лайнидж выключен форсом DAG-уровня")
-        return ""
+        return _refusal(dag_cur)
     cfg = _cfg()
     if cfg is None:
-        return ""
+        return _refusal(dag_cur)
     enabled = cfg.get("enabled")
     if forced is not True and enabled is not True:
         _logger.info("ol_policy: лайнидж выключен, Variable.enabled=false и форса DAG'а нет")
-        return ""
+        return _refusal(dag_cur)
     cfg = _validate_cfg()
     if cfg is None:
-        return ""
+        return _refusal(dag_cur)
     spark_conf_obj: object = cfg.get("spark_conf", {})
     spark_conf: dict[str, object] = spark_conf_obj if isinstance(spark_conf_obj, dict) else {}
     if field == "listener":
@@ -625,6 +643,11 @@ def inject_openlineage(task: object) -> None:
     выключивший лайнидж DAG уходит нетронутым. Значения лайниджа сюда не попадают —
     на парсе собираются только строки с вызовами макроса, а Variable и HDFS
     читаются на рендере.
+
+    Порядок двух записей тоже нормативен: атрибут ``jars`` пишется раньше conf,
+    поэтому обрыв между ними оставляет таску максимум с лишним jar'ом на classpath,
+    но без листенера — то есть без лайниджа, что безопасно; в обратном порядке
+    обрыв оставил бы листенер без jar'а, а это уже сломанный запуск Spark.
 
     :param task: экземпляр ``SparkSubmitOperator``; мутируется на месте.
     :return: None.

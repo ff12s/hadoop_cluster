@@ -1171,6 +1171,78 @@ def test_macro_ignores_bad_fields_when_honestly_off(
     assert warnings_of(caplog) == []
 
 
+# ---------------------------------------------------------------------------
+# Отказ от лайниджа не должен стирать собственное значение DAG'а (ревью Task 9,
+# Critical): на литеральном канале DAG-значение обязано пережить любой отказ.
+# ---------------------------------------------------------------------------
+
+
+def test_macro_disabled_keeps_dag_listener(variable: Callable[..., SimpleNamespace]) -> None:
+    """``enabled: false``: лайниджа нет, но DAG-listener на литеральном канале не стирается."""
+    variable(
+        raw=json.dumps(
+            {
+                "enabled": False,
+                "spark_conf": {
+                    "spark.extraListeners": "io.ol.L",
+                    "spark.openlineage.transport.url": "http://marquez:5000",
+                    "spark.openlineage.namespace": "ns",
+                },
+                "openlineage_jar": JAR,
+            }
+        )
+    )
+
+    assert ol_policy.ol_macro("listener", None, "com.example.A") == "com.example.A"
+
+
+def test_macro_disabled_keeps_dag_jars(variable: Callable[..., SimpleNamespace]) -> None:
+    """``enabled: false``: лайниджа нет, но DAG-jar'ы на литеральном канале не стираются."""
+    variable(
+        raw=json.dumps(
+            {
+                "enabled": False,
+                "spark_conf": {
+                    "spark.extraListeners": "io.ol.L",
+                    "spark.openlineage.transport.url": "http://marquez:5000",
+                    "spark.openlineage.namespace": "ns",
+                },
+                "openlineage_jar": JAR,
+            }
+        )
+    )
+
+    assert ol_policy.ol_macro("jar", None, "mylib.jar") == "mylib.jar"
+
+
+def test_macro_missing_variable_keeps_dag_listener(variable: Callable[..., SimpleNamespace]) -> None:
+    """Variable не задана: лайниджа нет, но DAG-listener на литеральном канале не стирается."""
+    variable(raw=None)
+
+    assert ol_policy.ol_macro("listener", None, "com.example.A") == "com.example.A"
+
+
+def test_macro_missing_variable_keeps_dag_jars(variable: Callable[..., SimpleNamespace]) -> None:
+    """Variable не задана: лайниджа нет, но DAG-jar'ы на литеральном канале не стираются."""
+    variable(raw=None)
+
+    assert ol_policy.ol_macro("jar", None, "mylib.jar") == "mylib.jar"
+
+
+def test_macro_refusal_keeps_empty_dag_channel_empty(variable: Callable[..., SimpleNamespace]) -> None:
+    """Канал '' (DAG молчал): отказ по-прежнему возвращает '', это не регрессия."""
+    variable(raw=None)
+
+    assert ol_policy.ol_macro("listener", None, "") == ""
+
+
+def test_macro_refusal_does_not_double_none_channel(variable: Callable[..., SimpleNamespace]) -> None:
+    """Канал None (текст DAG'а уже слева от вызова): отказ возвращает '', а не None-строку."""
+    variable(raw=None)
+
+    assert ol_policy.ol_macro("listener", None, None) == ""
+
+
 @pytest.mark.parametrize(
     "raw",
     [
@@ -1457,6 +1529,46 @@ def test_macro_jar_rejects_uri_without_scheme(
 
     assert ol_policy.ol_macro("jar", None, "") == ""
     assert any("без схемы" in message for message in warnings_of(caplog))
+
+
+def test_resolve_jar_probes_with_uri_and_parsed_path(
+    variable: Callable[..., SimpleNamespace], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``_resolve_jar`` зовёт ``jar_available`` с исходным URI (ключ мемо) и разобранным путём.
+
+    Все тесты ``test_macro_jar_*`` подменяют ``jar_available`` лямбдой, игнорирующей
+    аргументы, поэтому сама передача аргументов не была проверена ни разу.
+    """
+    variable(
+        raw=json.dumps(
+            {
+                "enabled": True,
+                "spark_conf": {
+                    "spark.extraListeners": "io.ol.L",
+                    "spark.openlineage.transport.url": "http://marquez:5000",
+                    "spark.openlineage.namespace": "ns",
+                },
+                "openlineage_jar": "hdfs://namenode:9000/opt/openlineage/o.jar",
+            }
+        )
+    )
+    calls: list[tuple[str, str]] = []
+
+    def _capture(jar_uri: str, path: str) -> bool:
+        """Записывает аргументы, с которыми зонд был вызван, и подтверждает jar.
+
+        :param jar_uri: URI jar'а, как он передан вызывающей стороной.
+        :param path: путь jar'а внутри HDFS, как он передан вызывающей стороной.
+        :return: True.
+        """
+        calls.append((jar_uri, path))
+        return True
+
+    monkeypatch.setattr(ol_policy, "jar_available", _capture)
+
+    ol_policy.ol_macro("jar", None, "")
+
+    assert calls == [("hdfs://namenode:9000/opt/openlineage/o.jar", "/opt/openlineage/o.jar")]
 
 
 def test_macro_jar_probes_once_per_uri(
