@@ -241,7 +241,7 @@ def test_dag_channel_safe_literal() -> None:
     assert ol_policy._dag_channel("a.jar,b.jar") == ("", "a.jar,b.jar")
 
 
-@pytest.mark.parametrize("value", ["{{ params.jars }}", "{% if x %}a.jar{% endif %}", "it's.jar", 'say"hi".jar'])
+@pytest.mark.parametrize("value", ["{{ params.jars }}", "{% if x %}a.jar{% endif %}", "it's.jar", 'say"hi".jar', r"C:\new.jar"])
 def test_dag_channel_unsafe_value_stays_in_the_string(value: str) -> None:
     """Jinja и кавычки нельзя вложить в текст вызова макроса — значение остаётся слева."""
     assert ol_policy._dag_channel(value) == (value, None)
