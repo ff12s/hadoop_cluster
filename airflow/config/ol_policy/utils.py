@@ -1,3 +1,5 @@
+"""Общие хелперы политики: монотонное время, идентификаторы таски, мердж CSV-значений."""
+
 from __future__ import annotations
 
 import time
@@ -33,13 +35,13 @@ def dag_and_task_ids(task: object) -> tuple[str, str]:
         return "?", "?"
 
 
-def _jar_items(value: object) -> list[str]:
-    """Элементы списка jar'ов из одного источника.
+def _csv_items(value: object) -> list[str]:
+    """Элементы CSV-значения одного источника.
 
-    Значение с Jinja не режется по запятой: атрибут jars и ``conf["spark.jars"]``
+    Значение с Jinja не режется по запятой: атрибут ``jars`` и ключи conf
     шаблонизируются, и разбиение порвало бы выражение с запятой внутри.
 
-    :param value: значение атрибута jars либо ключа ``spark.jars``.
+    :param value: значение атрибута оператора либо ключа conf.
     :return: список непустых элементов; для не-строки — пустой список.
     """
     if not isinstance(value, str):
@@ -48,41 +50,14 @@ def _jar_items(value: object) -> list[str]:
         return [value.strip()] if value.strip() else []
     return [item.strip() for item in value.split(",") if item.strip()]
 
-def merge_jars(current: object, conf_jars: object, jar: str) -> str:
-    """Склеивает три источника jar'ов: атрибут jars, ``conf["spark.jars"]`` и наш.
 
-    Элементы ``conf["spark.jars"]`` забираются в тот же канал потому, что явный
-    ``--jars`` вытесняет ``spark.jars`` как источник значения; сам ключ conf при
-    этом не переписывается.
+def merge_csv(*sources: object) -> str:
+    """Склеивает CSV-источники в порядке перечисления, убирая дубликаты.
 
-    :param current: текущее значение атрибута jars оператора.
-    :param conf_jars: значение ключа ``spark.jars`` из conf таски.
-    :param jar: наш jar.
-    :return: список jar'ов через запятую, без дубликатов и с сохранением порядка.
+    Одни правила для jar'ов и для listener'ов. Дедуп listener'ов защищает от двух
+    инстансов одного класса и, как следствие, от задвоенных событий лайниджа.
+
+    :param sources: значения источников: атрибут ``jars``, ключи conf, наше значение.
+    :return: элементы через запятую; "" если все источники пусты.
     """
-    merged: list[str] = []
-    for source in (current, conf_jars, jar):
-        for item in _jar_items(source):
-            if item not in merged:
-                merged.append(item)
-    return ",".join(merged)
-
-def merge_listeners(dag_cur: object, our_listener: object) -> str:
-    """Склеивает CSV-лист listener'ов DAG-уровня с классом из Variable.
-
-    Правила те же, что у ``merge_jars``: пустые элементы отбрасываются,
-    значение с Jinja не режется по запятой, порядок сохраняется, дубликаты
-    убираются. DAG-listener'ы идут первыми, наш — последним: дедуп защищает
-    от двух инстансов одного листенера и, как следствие, от дублирующихся
-    событий лайниджа.
-
-    :param dag_cur: значение ``conf["spark.extraListeners"]``, каким его задал DAG.
-    :param our_listener: класс listener'а из ``spark_conf["spark.extraListeners"]``.
-    :return: список классов через запятую; "" если оба источника пусты.
-    """
-    merged: list[str] = []
-    for source in (dag_cur, our_listener):
-        for item in _jar_items(source):
-            if item not in merged:
-                merged.append(item)
-    return ",".join(merged)
+    return ",".join(dict.fromkeys(item for source in sources for item in _csv_items(source)))

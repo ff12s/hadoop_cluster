@@ -605,12 +605,12 @@ def test_endpoint_host_comes_from_resolver_not_from_jar_uri(
 
 def test_merge_jars_keeps_all_three_sources() -> None:
     """Три источника склеиваются в порядке jars → conf → наш, без дубликатов."""
-    assert ol_policy.merge_jars("a.jar", "b.jar,a.jar", JAR) == f"a.jar,b.jar,{JAR}"
+    assert ol_policy.merge_csv("a.jar", "b.jar,a.jar", JAR) == f"a.jar,b.jar,{JAR}"
 
 
 def test_merge_jars_ignores_non_strings() -> None:
     """``None`` и не-строка дают пустой вклад."""
-    assert ol_policy.merge_jars(None, ["b.jar"], JAR) == JAR
+    assert ol_policy.merge_csv(None, ["b.jar"], JAR) == JAR
 
 
 @pytest.mark.parametrize(
@@ -619,8 +619,8 @@ def test_merge_jars_ignores_non_strings() -> None:
 )
 def test_merge_jars_does_not_split_jinja(templated: str) -> None:
     """Значение с Jinja не режется по запятой: выражение осталось бы битым."""
-    assert ol_policy.merge_jars(templated, None, JAR) == f"{templated},{JAR}"
-    assert ol_policy.merge_jars(None, templated, JAR) == f"{templated},{JAR}"
+    assert ol_policy.merge_csv(templated, None, JAR) == f"{templated},{JAR}"
+    assert ol_policy.merge_csv(None, templated, JAR) == f"{templated},{JAR}"
 
 
 def test_dag_jars_survive(layout: SimpleNamespace, jar_ok: list[tuple[str, str]]) -> None:
@@ -2085,40 +2085,40 @@ def test_double_encoded_value_is_not_an_object() -> None:
 
 
 # ---------------------------------------------------------------------------
-# merge_listeners (§8, цикл 1)
+# merge_csv — listener'ы (§8, цикл 1)
 # ---------------------------------------------------------------------------
 
 
 def test_merge_listeners_dag_first_then_our() -> None:
     """DAG-listener первым, OL-listener последним, порядок CSV сохранён."""
-    assert ol_policy.merge_listeners("com.example.A,com.example.B", "io.ol.L") == "com.example.A,com.example.B,io.ol.L"
+    assert ol_policy.merge_csv("com.example.A,com.example.B", "io.ol.L") == "com.example.A,com.example.B,io.ol.L"
 
 
 def test_merge_listeners_dedups_existing_ol() -> None:
     """Если OL-listener уже в DAG-CSV — дедуп, не дублируется."""
-    assert ol_policy.merge_listeners("com.example.A,io.ol.L", "io.ol.L") == "com.example.A,io.ol.L"
+    assert ol_policy.merge_csv("com.example.A,io.ol.L", "io.ol.L") == "com.example.A,io.ol.L"
 
 
 def test_merge_listeners_only_dag() -> None:
     """Только DAG — возвращаем DAG как есть."""
-    assert ol_policy.merge_listeners("com.example.A", "") == "com.example.A"
+    assert ol_policy.merge_csv("com.example.A", "") == "com.example.A"
 
 
 def test_merge_listeners_only_our() -> None:
     """Только OL — возвращаем OL."""
-    assert ol_policy.merge_listeners("", "io.ol.L") == "io.ol.L"
+    assert ol_policy.merge_csv("", "io.ol.L") == "io.ol.L"
 
 
 def test_merge_listeners_both_empty() -> None:
     """Пусто и там, и там — пустая строка."""
-    assert ol_policy.merge_listeners("", "") == ""
+    assert ol_policy.merge_csv("", "") == ""
 
 
 @pytest.mark.parametrize("templated", ["{{ params.listener }}", "{% if x %}A,B{% endif %}"])
 def test_merge_listeners_does_not_split_jinja(templated: str) -> None:
     """Jinja-выражение не режется по запятой."""
-    assert ol_policy.merge_listeners(templated, "io.ol.L") == f"{templated},io.ol.L"
-    assert ol_policy.merge_listeners("", templated) == templated
+    assert ol_policy.merge_csv(templated, "io.ol.L") == f"{templated},io.ol.L"
+    assert ol_policy.merge_csv("", templated) == templated
 
 
 def test_emit_without_dag_value_returns_value_as_is() -> None:
@@ -2143,19 +2143,19 @@ def test_emit_without_dag_value_returns_value_as_is() -> None:
 
 def test_emit_with_literal_merges_and_dedups() -> None:
     """Канал-литерал: полный мердж с дедупом, DAG-значения первыми."""
-    merged = ol_policy.render._emit("io.ol.L", "com.example.A,io.ol.L", ol_policy.merge_listeners, "spark.extraListeners")
+    merged = ol_policy.render._emit("io.ol.L", "com.example.A,io.ol.L", ol_policy.merge_csv, "spark.extraListeners")
 
     assert merged == "com.example.A,io.ol.L"
 
 
 def test_emit_with_none_channel_prefixes_comma() -> None:
     """Канал None: слева уже стоит текст DAG'а — дописываем через запятую."""
-    assert ol_policy.render._emit("io.ol.L", None, ol_policy.merge_listeners, "spark.extraListeners") == ",io.ol.L"
+    assert ol_policy.render._emit("io.ol.L", None, ol_policy.merge_csv, "spark.extraListeners") == ",io.ol.L"
 
 
 def test_emit_uses_the_merge_it_was_given() -> None:
     """Ветка jar использует свой мердж — сплит и дедуп по тем же правилам."""
-    merged = ol_policy.render._emit("hdfs://n:9000/o.jar", "a.jar", ol_policy.render._merge_jars_pair, "spark.jars")
+    merged = ol_policy.render._emit("hdfs://n:9000/o.jar", "a.jar", ol_policy.merge_csv, "spark.jars")
 
     assert merged == "a.jar,hdfs://n:9000/o.jar"
 
@@ -2164,13 +2164,13 @@ def test_emit_uses_the_merge_it_was_given() -> None:
 # Сквозные тесты: живой Jinja и различимость причин отказа (Task 10)
 # ---------------------------------------------------------------------------
 
-airflow_dag = pytest.importorskip("airflow.models.dag", reason="нужен установленный Airflow")
-
-
+@pytest.mark.skipif(not _airflow_installed(), reason="нужен установленный Airflow")
 def test_full_cycle_renders_expected_command_values(
     variable: Callable[..., SimpleNamespace], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Парс собрал строки, живой Jinja их отрендерил — значения на месте, запятых лишних нет."""
+    from airflow.models import dag as airflow_dag
+
     _variable_full(variable)
     monkeypatch.setattr(ol_policy.probe, "jar_available", lambda jar_uri, path: True)
     dag = airflow_dag.DAG(dag_id="render", schedule=None, start_date=None)
@@ -2187,10 +2187,13 @@ def test_full_cycle_renders_expected_command_values(
     assert rendered_jars == "a.jar,hdfs://namenode:9000/o.jar"
 
 
+@pytest.mark.skipif(not _airflow_installed(), reason="нужен установленный Airflow")
 def test_full_cycle_leaves_no_trailing_comma_when_lineage_is_off(
     variable: Callable[..., SimpleNamespace]
 ) -> None:
     """Инвариант 17: выключённый лайнидж не оставляет висячей запятой."""
+    from airflow.models import dag as airflow_dag
+
     variable(raw=json.dumps({
         "enabled": False,
         "spark_conf": {
@@ -2210,6 +2213,7 @@ def test_full_cycle_leaves_no_trailing_comma_when_lineage_is_off(
     assert env.from_string(task.conf["spark.extraListeners"]).render() == "com.example.A"
 
 
+@pytest.mark.skipif(not _airflow_installed(), reason="нужен установленный Airflow")
 def test_full_cycle_injects_nothing_when_jar_is_absent(
     variable: Callable[..., SimpleNamespace], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2219,6 +2223,8 @@ def test_full_cycle_injects_nothing_when_jar_is_absent(
     но пустыми: без listener'а и без jar'а они безвредны. Проверяем именно то, что
     роняло драйвер, — класс листенера и URI jar'а.
     """
+    from airflow.models import dag as airflow_dag
+
     _variable_full(variable)
     monkeypatch.setattr(ol_policy.probe, "jar_available", lambda jar_uri, path: False)
     dag = airflow_dag.DAG(dag_id="render_no_jar", schedule=None, start_date=None)
@@ -2237,10 +2243,13 @@ def test_full_cycle_injects_nothing_when_jar_is_absent(
     assert "hdfs://namenode:9000/o.jar" not in "".join(rendered_conf.values()) + rendered_jars
 
 
+@pytest.mark.skipif(not _airflow_installed(), reason="нужен установленный Airflow")
 def test_full_cycle_keeps_dag_values_when_jar_is_absent(
     variable: Callable[..., SimpleNamespace], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Инвариант 18 сквозным прогоном: отказ зонда не стирает listener и jar'ы самого DAG'а."""
+    from airflow.models import dag as airflow_dag
+
     _variable_full(variable)
     monkeypatch.setattr(ol_policy.probe, "jar_available", lambda jar_uri, path: False)
     dag = airflow_dag.DAG(dag_id="render_no_jar_dag_values", schedule=None, start_date=None)

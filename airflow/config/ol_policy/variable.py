@@ -1,18 +1,27 @@
 """Чтение и проверка Airflow Variable ``openlineage_config``.
 
-Читается только на рендере, на воркере: на парсе обращение к метастору съело бы
-бюджет разбора DAG-файла. Никогда не бросает — при любой ошибке возвращает None,
-и лайнидж просто не включается.
+Читается только на рендере, на воркере (почему не на парсе — см. ``parse``). Никогда
+не бросает: при любой ошибке возвращает None, и лайнидж просто не включается.
 """
 
 from __future__ import annotations
 
 import functools
 import json
+from typing import NamedTuple
 
 from .logger import warn_once
 
 VARIABLE = "openlineage_config"
+
+
+class Config(NamedTuple):
+    """Проверенные поля Variable ``openlineage_config``: все непустые, уже очищенные."""
+
+    listener: str
+    url: str
+    namespace: str
+    jar_uri: str
 
 
 def _clean(value: object, *, require_scheme: bool = False) -> str:
@@ -81,29 +90,36 @@ def _cfg() -> dict[str, object] | None:
 
 
 @functools.lru_cache(maxsize=1)
-def _validate_cfg() -> dict[str, object] | None:
+def _validate_cfg() -> Config | None:
     """Проверяет годность Variable один раз на процесс: недостающие поля — одним warning'ом.
 
     Аргументов нет намеренно: под ``lru_cache`` они хэшируются, а разобранный
     конфиг — dict, и любой вызов упал бы с ``TypeError: unhashable type``.
 
-    :return: конфиг из ``_cfg``, либо None, если он непригоден для включения лайниджа.
+    :return: проверенный конфиг либо None, если он непригоден для включения лайниджа.
     """
     cfg = _cfg()
     if cfg is None:
         return None
+    # Ключи JSON-объекта статически не строки: отсюда ``dict[object, object]`` и копия.
     spark_conf_obj: object = cfg.get("spark_conf", {})
-    spark_conf: dict[str, object] = spark_conf_obj if isinstance(spark_conf_obj, dict) else {}
-    missing: list[str] = []
-    if not _clean(spark_conf.get("spark.extraListeners")):
-        missing.append("spark_conf.spark.extraListeners (непустая строка)")
-    if not _clean(spark_conf.get("spark.openlineage.transport.url"), require_scheme=True):
-        missing.append("spark_conf.spark.openlineage.transport.url (http/https URL)")
-    if not _clean(spark_conf.get("spark.openlineage.namespace")):
-        missing.append("spark_conf.spark.openlineage.namespace (непустая строка)")
-    jar_uri = cfg.get("openlineage_jar")
-    if not (isinstance(jar_uri, str) and jar_uri.strip()):
-        missing.append("openlineage_jar (hdfs://... URI)")
+    spark_conf: dict[object, object] = {**spark_conf_obj} if isinstance(spark_conf_obj, dict) else {}
+    config = Config(
+        listener=_clean(spark_conf.get("spark.extraListeners")),
+        url=_clean(spark_conf.get("spark.openlineage.transport.url"), require_scheme=True),
+        namespace=_clean(spark_conf.get("spark.openlineage.namespace")),
+        jar_uri=_clean(cfg.get("openlineage_jar")),
+    )
+    missing = [
+        name
+        for value, name in (
+            (config.listener, "spark_conf.spark.extraListeners (непустая строка)"),
+            (config.url, "spark_conf.spark.openlineage.transport.url (http/https URL)"),
+            (config.namespace, "spark_conf.spark.openlineage.namespace (непустая строка)"),
+            (config.jar_uri, "openlineage_jar (hdfs://... URI)"),
+        )
+        if not value
+    ]
     if missing:
         warn_once(
             ("var-incomplete",),
@@ -111,4 +127,4 @@ def _validate_cfg() -> dict[str, object] | None:
             ", ".join(missing),
         )
         return None
-    return cfg
+    return config

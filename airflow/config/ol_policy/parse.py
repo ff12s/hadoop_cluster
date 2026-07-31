@@ -9,8 +9,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from . import operator
-from . import utils
+from . import operator, utils
 from .logger import warn_once
 
 MACRO = "__openlineage_v1"
@@ -56,9 +55,7 @@ def inject_openlineage(task: object) -> None:
     """Навешивает OpenLineage на проверенную Spark-таску: макрос и строки в conf.
 
     Порядок гейтов нормативен: форс-выключение проверяется раньше всего, поэтому
-    выключивший лайнидж DAG уходит нетронутым. Значения лайниджа сюда не попадают —
-    на парсе собираются только строки с вызовами макроса, а Variable и HDFS
-    читаются на рендере.
+    выключивший лайнидж DAG уходит нетронутым.
 
     Порядок двух записей тоже нормативен: атрибут ``jars`` пишется раньше conf,
     поэтому обрыв между ними оставляет таску максимум с лишним jar'ом на classpath,
@@ -68,8 +65,8 @@ def inject_openlineage(task: object) -> None:
     :param task: экземпляр ``SparkSubmitOperator``; мутируется на месте.
     :return: None.
     """
-    # Импорт внутри функции, а не на уровне модуля: from . import render потянул бы
-    # за собой variable и probe, а парс не должен доставать до Variable и сети.
+    # Импорт внутри функции: граф импортов парс-модуля не тянет цепочку
+    # render → variable, probe, и разделение фаз видно в коде, а не только в docstring'ах.
     from . import render
     macro = render.ol_macro
 
@@ -77,7 +74,12 @@ def inject_openlineage(task: object) -> None:
 
     attrs = operator.operator_attrs(task)
     if attrs is None:
-        warn_once(("unknown-layout", dag_id, task_id), "OpenLineage не включён: незнакомая раскладка атрибутов оператора (%s.%s)", dag_id, task_id)
+        warn_once(
+            ("unknown-layout", dag_id, task_id),
+            "OpenLineage не включён: незнакомая раскладка атрибутов оператора (%s.%s)",
+            dag_id,
+            task_id,
+        )
         return
 
     forced = operator.lineage_forced(task)
@@ -86,27 +88,35 @@ def inject_openlineage(task: object) -> None:
 
     dag = utils.task_dag(task)
     if dag is None:
-        warn_once(("no-dag", dag_id, task_id), "OpenLineage не включён: таска не привязана к DAG, макрос положить некуда (%s)", task_id)
+        warn_once(
+            ("no-dag", dag_id, task_id),
+            "OpenLineage не включён: таска не привязана к DAG, макрос положить некуда (%s)",
+            task_id,
+        )
         return
 
-    # Макрос кладётся в DAG политикой намеренно: это единственный способ отложить
-    # чтение Variable до рендера таски, ничего не требуя от автора DAG'а. Чужим
-    # считается только объект, который не является нашей функцией, — иначе вторая
-    # таска файла увидела бы чужим то, что положила первая.
+    # Макрос кладётся в DAG политикой: иначе отложить чтение Variable до рендера,
+    # ничего не требуя от автора DAG'а, нечем. Чужим считается только объект, не
+    # являющийся нашей функцией, — иначе вторая таска файла сочла бы чужим то, что
+    # положила первая.
     macros = dict(getattr(dag, "user_defined_macros", None) or {})
     if MACRO in macros and macros[MACRO] is not macro:
-        warn_once(("macro-taken", dag_id, task_id), "OpenLineage не включён: имя макроса %s занято чужим объектом (%s.%s)", MACRO, dag_id, task_id)
+        warn_once(
+            ("macro-taken", dag_id, task_id),
+            "OpenLineage не включён: имя макроса %s занято чужим объектом (%s.%s)",
+            MACRO,
+            dag_id,
+            task_id,
+        )
         return
 
     forced_literal: Literal["true", "none"] = "true" if forced is True else "none"
     cur_conf = dict(getattr(task, attrs.conf) or {})
 
     listener_prefix, listener_cur = _dag_channel(cur_conf.get("spark.extraListeners"))
-    # Оба канала jar'ов известны здесь и склеиваются до макроса: на рендере
-    # прочитать их будет нечем.
-    jars_prefix, jars_cur = _dag_channel(utils.merge_jars(getattr(task, attrs.jars), cur_conf.get("spark.jars"), ""))
-    # Для скаляров префикс отбрасывается: OL побеждает целиком, дописывать текст
-    # DAG'а слева значило бы нарушить это правило.
+    # jar'ы приезжают из двух мест сразу и склеиваются до макроса — одним каналом.
+    jars_prefix, jars_cur = _dag_channel(utils.merge_csv(getattr(task, attrs.jars), cur_conf.get("spark.jars")))
+    # У скаляров префикс отбрасывается: OL побеждает целиком (см. ``render._scalar``).
     _, url_cur = _dag_channel(cur_conf.get("spark.openlineage.transport.url"))
     _, namespace_cur = _dag_channel(cur_conf.get("spark.openlineage.namespace"))
 

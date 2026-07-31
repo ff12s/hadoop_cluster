@@ -64,7 +64,7 @@ def parse_hadoop_xml(filename: str) -> dict[str, str]:
     :raises OSError: файл недоступен.
     :raises ElementTree.ParseError: файл не является корректным XML.
     """
-    tree = ElementTree.parse(os.path.join(hadoop_conf_dir(), filename))
+    tree = ElementTree.parse(os.path.join(hadoop_conf_dir(), filename))  # noqa: S314 конфиги кластера, не ввод
     props: dict[str, str] = {}
     for prop in tree.getroot().findall("property"):
         name = prop.findtext("name")

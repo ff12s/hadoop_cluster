@@ -16,13 +16,10 @@ Airflow Variable, ``probe`` ходит в HDFS, ``operator`` знает про �
 
 from __future__ import annotations
 
-from . import logger
-from . import operator
-from . import parse
-from . import probe
-from . import render
-from . import utils
-from . import variable
+# Подмодули импортируются целиком ради путей ``ol_policy.<module>``: подменять
+# поведение нужно у модуля-владельца, потому что вызов внутри него идёт через его
+# собственный глобал. Символьные реэкспорты ниже — read-only алиасы.
+from . import logger, operator, parse, probe, render, utils, variable  # noqa: F401
 from .operator import lineage_forced, operator_attrs, passthrough_exceptions
 from .parse import MACRO, inject_openlineage
 from .probe import jar_available, jar_path
@@ -39,14 +36,8 @@ __all__ = [
     "lineage_forced",
     "passthrough_exceptions",
     "MACRO",
-    "merge_jars",
-    "merge_listeners",
+    "merge_csv",
 ]
-
-# Реэкспорты ниже — это read-only алиасы: собственный код пакета их не читает,
-# он всегда обращается к атрибуту через модуль-владелец. monkeypatch.setattr(ol_policy, "X", ...)
-# поэтому подменяет только эту переменную здесь, а не вызов внутри модуля-владельца —
-# патчить нужно submodule (ol_policy.probe.X, ol_policy.render.X и т.д.).
 
 
 def apply_policy(task: object) -> None:
@@ -66,14 +57,25 @@ def apply_policy(task: object) -> None:
         if not isinstance(task, operator_cls):
             if operator._looks_like_spark_submit(task, operator_cls):
                 dag_id, task_id = utils.dag_and_task_ids(task)
-                logger.warn_once(("mapped", dag_id, task_id), "OpenLineage не включён: динамический маппинг тасок не поддерживается (%s.%s)", dag_id, task_id)
+                logger.warn_once(
+                    ("mapped", dag_id, task_id),
+                    "OpenLineage не включён: динамический маппинг тасок не поддерживается (%s.%s)",
+                    dag_id,
+                    task_id,
+                )
             return
         parse.inject_openlineage(task)
     except operator.passthrough_exceptions():
         raise
     except Exception:
         dag_id, task_id = utils.dag_and_task_ids(task)
-        logger.warn_once(("unexpected", dag_id, task_id), "OpenLineage не включён: непредвиденная ошибка cluster policy (%s.%s)", dag_id, task_id, exc_info=True)
+        logger.warn_once(
+            ("unexpected", dag_id, task_id),
+            "OpenLineage не включён: непредвиденная ошибка cluster policy (%s.%s)",
+            dag_id,
+            task_id,
+            exc_info=True,
+        )
 
 
 def reset_state() -> None:
@@ -82,7 +84,6 @@ def reset_state() -> None:
     Зовётся фикстурой ``_reset_policy_state`` (conftest.py) до и после каждого
     теста: дедупликация warning'ов, кэши конфига, мемо зонда и кэш классов
     исключений переживают границу теста и без сброса смешали бы результаты.
-    Единственное место, которое знает обо всех четырёх хранилищах сразу.
 
     :return: None.
     """
@@ -94,5 +95,4 @@ def reset_state() -> None:
 
 
 # Реэкспорт утилит: тесты и вызывающий код обращаются к ним через пакет политики.
-merge_jars = utils.merge_jars
-merge_listeners = utils.merge_listeners
+merge_csv = utils.merge_csv

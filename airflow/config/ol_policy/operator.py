@@ -1,17 +1,14 @@
 """Совместимость с двумя раскладками ``SparkSubmitOperator`` и тумблер из ``params``.
 
 Обслуживает парс-фазу: это всё, что парсу нужно знать про объект таски, и здесь не
-читается ничего, кроме самого объекта. Провайдер 4.1.1 держит conf и jars
-приватными, 4.10.0 — публичными, поэтому имена атрибутов резолвятся, а не
-зашиваются. Здесь же лесенка форса ``task.params`` → ``dag.params`` и список
-исключений, которые политика обязана пропускать наружу.
+читается ничего, кроме самого объекта. Здесь же лесенка форса ``task.params`` →
+``dag.params`` и список исключений, которые политика обязана пропускать наружу.
 """
 
 from __future__ import annotations
 
 import importlib
-from types import SimpleNamespace
-from typing import Tuple, Type
+from typing import NamedTuple
 
 from . import utils
 from .logger import warn_once
@@ -26,7 +23,14 @@ _passthrough_cache: tuple[type[BaseException], ...] | None = None
 _ATTR_CANDIDATES: dict[str, tuple[str, ...]] = {"conf": ("conf", "_conf"), "jars": ("jars", "_jars")}
 
 
-def passthrough_exceptions() -> Tuple[Type[BaseException], ...]:
+class OperatorAttrs(NamedTuple):
+    """Имена атрибутов conf и jars конкретной раскладки оператора."""
+
+    conf: str
+    jars: str
+
+
+def passthrough_exceptions() -> tuple[type[BaseException], ...]:
     """Классы исключений, которые политика обязана пропускать наружу.
 
     Собирается поимённо, каждый класс своим ``try/except``: в 2.6.3 нет
@@ -48,17 +52,16 @@ def passthrough_exceptions() -> Tuple[Type[BaseException], ...]:
     return _passthrough_cache
 
 
-def operator_attrs(task: object) -> SimpleNamespace | None:
+def operator_attrs(task: object) -> OperatorAttrs | None:
     """Имена атрибутов conf и jars у этого оператора.
 
-    Имя обязано одновременно быть в ``template_fields`` (значит, будет
-    отрендерено) и существовать на объекте (значит, его читает hook). В
-    провайдере 4.1.1 атрибуты приватные, в 4.10.0 — публичные, поэтому имя
-    резолвится, а не зашивается.
+    В провайдере 4.1.1 conf и jars приватные, в 4.10.0 — публичные, поэтому имя
+    резолвится, а не зашивается. Годным считается только имя, которое разом есть в
+    ``template_fields`` (значит, будет отрендерено) и на объекте (значит, его
+    читает hook).
 
     :param task: таска Airflow.
-    :return: пространство имён с полями ``conf`` и ``jars``, либо None,
-        если раскладка незнакома.
+    :return: имена атрибутов либо None, если раскладка незнакома.
     """
     fields = set(getattr(task, "template_fields", ()) or ())
     resolved: dict[str, str] = {}
@@ -69,7 +72,7 @@ def operator_attrs(task: object) -> SimpleNamespace | None:
                 break
         else:
             return None
-    return SimpleNamespace(**resolved)
+    return OperatorAttrs(**resolved)
 
 
 def _spark_submit_operator() -> type | None:
@@ -122,13 +125,25 @@ def _level_forced(owner: object, level: str, dag_id: str, task_id: str) -> bool 
             return None
         value = params["openlineage"]
     except Exception:
-        warn_once(("unreadable-toggle", dag_id, task_id), "OpenLineage: не удалось прочитать params['openlineage'] — уровень %s игнорируется (%s.%s)", level, dag_id, task_id)
+        warn_once(
+            ("unreadable-toggle", dag_id, task_id),
+            "OpenLineage: не удалось прочитать params['openlineage'] — уровень %s игнорируется (%s.%s)",
+            level,
+            dag_id,
+            task_id,
+        )
         return None
     if value is None:
         return None
     if isinstance(value, bool):
         return value
-    warn_once(("bad-toggle", dag_id, task_id), "OpenLineage: params['openlineage'] не является булевым — уровень %s игнорируется (%s.%s)", level, dag_id, task_id)
+    warn_once(
+        ("bad-toggle", dag_id, task_id),
+        "OpenLineage: params['openlineage'] не является булевым — уровень %s игнорируется (%s.%s)",
+        level,
+        dag_id,
+        task_id,
+    )
     return None
 
 

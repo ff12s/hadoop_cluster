@@ -1,14 +1,18 @@
+"""Логгер политики с дедупликацией: одна причина отказа не спамит лог на каждой таске."""
+
+from __future__ import annotations
+
 import logging
-from typing import Dict, Tuple
 
 from . import utils
 
 logger = logging.getLogger("ol_policy")
 
-_warned: Dict[Tuple[str, ...], float] = {}
+_warned: dict[tuple[str, ...], float] = {}
 _WARN_TTL_SEC = 300.0
 
-def warn_once(key: Tuple[str, ...], msg: str, *args: object, exc_info: bool = False) -> None:
+
+def warn_once(key: tuple[str, ...], msg: str, *args: object, exc_info: bool = False) -> None:
     """Пишет warning не чаще одного раза в ``_WARN_TTL_SEC`` по ключу дедупликации.
 
     Причины, зависящие от таски, дедуплицируются ключом ``(причина, dag_id, task_id)``,
