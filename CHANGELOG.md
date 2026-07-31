@@ -16,5 +16,9 @@
 
 ### Удалено
 
-- Переменные окружения `OPENLINEAGE_URL`, `OPENLINEAGE_NAMESPACE`, `OPENLINEAGE_JAR`.
-  Конфиг лайниджа правится в Admin → Variables. `OPENLINEAGE_CONFIG_RESEED` остаётся как рычаг пересева.
+- Переменные окружения `OPENLINEAGE_URL`, `OPENLINEAGE_NAMESPACE`, `OPENLINEAGE_JAR` — со стороны
+  Airflow (`env_example`, `docker-compose.yml`, cluster policy). Конфиг лайниджа правится в
+  Admin → Variables. `OPENLINEAGE_CONFIG_RESEED` остаётся как рычаг пересева.
+  `jupyter/scripts/start-jupyter.sh` по-прежнему читает свои `OPENLINEAGE_URL`/`OPENLINEAGE_NAMESPACE`
+  со своими дефолтами для pyspark-shell ноутбуков — это отдельный рантайм, его не трогали, названия
+  переменных живы там.

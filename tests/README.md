@@ -70,10 +70,14 @@
 - ✅ Приложение YARN именно этого прогона (id разбирается из лога таски) дошло до SUCCEEDED
 - ✅ raw.parquet и agg.parquet записаны в HDFS
 - ✅ Лайнидж доехал до Marquez, и `agg.parquet` обновлён этим прогоном (а не остался от предыдущего)
-- ✅ Cluster policy: в фактически собранной команде `spark-submit` присутствуют оба jar'а — DAG'овский и openlineage — и оба listener'а, если DAG задал свой
-- ✅ DAG, передавший свой `spark.extraListeners`, всё равно получает OL-listener из Variable
+- ✅ Cluster policy: в фактически собранной команде `spark-submit` присутствует вызов макроса `__openlineage_v1`, и оба jar'а DAG'а (`mine.jar`, `other.jar`) сохранились в ней; `conf['spark.jars']` при этом не переписан
 - ✅ Тумблер `params={"openlineage": False}` убирает листенер из команды
 - ✅ Правка Variable `openlineage_config` подхватывается без рестарта, со следующего запуска таски (значение восстанавливается после проверки)
+
+Мердж `spark.extraListeners` DAG'а с OL-listener'ом из Variable этот бат-скрипт не проверяет — команда
+строится напрямую через `_build_spark_submit_command`, без рендера Jinja и без DAG-listener'а на
+входе. Сам мердж (дедуп, порядок, побеждающий Variable) покрыт юнит-тестами
+`airflow/config/tests/test_ol_policy.py` (запускаются `test-policy.bat`).
 
 ### Тесты cluster policy (`test-policy.bat`):
 - ✅ Health контейнера `hadoop-airflow`
