@@ -69,10 +69,15 @@ def _inject(task: object) -> None:
         return
     path = probe.jar_path(config.jar_uri)
     if path is None:
-        log.warning("OpenLineage не включён: openlineage_jar задан без схемы или без пути (%s)", config.jar_uri)
+        warn_once(
+            ("jar-malformed",),
+            "OpenLineage не включён: openlineage_jar задан без схемы или без пути (%s)",
+            config.jar_uri,
+        )
         return
     if not probe.jar_available(config.jar_uri, path):
-        log.warning(
+        warn_once(
+            ("jar-missing",),
             "OpenLineage не включён: jar отсутствует или недоступен в HDFS (%s). "
             "Залейте его: scripts/seed-openlineage-jar.bat",
             config.jar_uri,

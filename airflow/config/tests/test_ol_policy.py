@@ -2657,3 +2657,37 @@ def test_callback_force_on_beats_disabled(
     assert getattr(task, layout.conf)["spark.extraListeners"] == "io.openlineage.spark.agent.OpenLineageSparkListener"
 
 
+def test_callback_config_values_never_reach_the_log(
+    layout: SimpleNamespace,
+    spark_operator: type,
+    variable: Callable[..., SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Инвариант 5 на колбэк-пути: listener/url/namespace из Variable не попадают в warning-лог.
+
+    Зонд отказывает (jar_available=False), поэтому отказ логируется через ``warn_once``
+    с ``jar_uri`` — это допустимо (см. ``probe.py``: "probe-deadline", "probe-error"), а
+    вот listener/url/namespace из уже провалидированного ``config`` светиться в warning
+    не должны вовсе.
+    """
+    variable(raw=json.dumps({
+        "enabled": True,
+        "spark_conf": {
+            "spark.extraListeners": "com.example.SecretListener",
+            "spark.openlineage.transport.url": "http://secret-host:5000",
+            "spark.openlineage.namespace": "secret-namespace",
+        },
+        "openlineage_jar": "hdfs:///jars/openlineage-spark.jar",
+    }))
+    monkeypatch.setattr(ol_policy.probe, "jar_available", lambda jar_uri, path: False)
+    task = layout.cls(dag=DummyDag(), conf={})
+
+    _run_callback(task)
+
+    joined = "\n".join(warnings_of(caplog))
+    assert "com.example.SecretListener" not in joined
+    assert "secret-host" not in joined
+    assert "secret-namespace" not in joined
+
+
