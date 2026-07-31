@@ -79,7 +79,7 @@ def apply_policy(task: object) -> None:
 
 
 def reset_state() -> None:
-    """Сбрасывает всё модульное состояние политики.
+    """Сбрасывает всё модульное состояние политики (см. reset() модулей).
 
     Зовётся фикстурой ``_reset_policy_state`` (conftest.py) до и после каждого
     теста: дедупликация warning'ов, кэши конфига, мемо зонда и кэш классов
@@ -87,11 +87,10 @@ def reset_state() -> None:
 
     :return: None.
     """
-    logger._warned.clear()
-    variable._cfg.cache_clear()
-    variable._validate_cfg.cache_clear()
-    probe._jar_memo.clear()
-    operator._passthrough_cache = None
+    logger.reset()
+    variable.reset()
+    probe.reset()
+    operator.reset()
 
 
 # Реэкспорт утилит: тесты и вызывающий код обращаются к ним через пакет политики.

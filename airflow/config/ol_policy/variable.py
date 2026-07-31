@@ -6,13 +6,25 @@
 
 from __future__ import annotations
 
-import functools
 import json
 from typing import NamedTuple
 
+from . import utils
 from .logger import warn_once
 
 VARIABLE = "openlineage_config"
+
+_TTL_SEC = 300.0
+
+# Ре-экспорт ради тестов: фикстура ``clock`` подменяет символ, который читает
+# этот модуль, а не модуль-владелец (тот же приём, что в probe).
+_now = utils.now
+
+# Мемо на процесс с TTL: значение читается несколько раз за один запуск таски,
+# а на исполнителе с переиспользуемыми процессами правка Variable подхватится
+# не позже чем через _TTL_SEC.
+_cfg_memo: tuple[float, dict[str, object] | None] | None = None
+_validated_memo: tuple[float, Config | None] | None = None
 
 
 class Config(NamedTuple):
@@ -39,14 +51,28 @@ def _clean(value: object, *, require_scheme: bool = False) -> str:
     return cleaned
 
 
-@functools.lru_cache(maxsize=1)
 def _cfg() -> dict[str, object] | None:
-    """Конфиг OL из Airflow Variable. Никогда не бросает: при любой ошибке — None.
+    """Конфиг OL из Airflow Variable, с TTL-мемо на процесс.
 
-    Мемо на процесс: значение читается тремя вызовами макроса за один рендер, а
-    процесс запуска таски на воркере живёт одну таску. На исполнителе с
-    переиспользуемыми процессами мемо становится кэшем без TTL — правка Variable
-    подхватится только следующим процессом.
+    Значение читается тремя вызовами макроса за один рендер, а процесс
+    запуска таски на воркере живёт одну таску — TTL защищает от повторного
+    похода в metastore внутри неё. На исполнителе с переиспользуемыми
+    процессами правка Variable подхватится не позже чем через ``_TTL_SEC``.
+
+    :return: разобранный конфиг с ключами enabled, spark_conf, openlineage_jar,
+        либо None, если конфиг прочитать не удалось или его форма неверна;
+        причина в этом случае уже записана в лог.
+    """
+    global _cfg_memo
+    if _cfg_memo is not None and _now() - _cfg_memo[0] < _TTL_SEC:
+        return _cfg_memo[1]
+    value = _load_cfg()
+    _cfg_memo = (_now(), value)
+    return value
+
+
+def _load_cfg() -> dict[str, object] | None:
+    """Читает и разбирает Variable ``openlineage_config``. Никогда не бросает.
 
     :return: разобранный конфиг с ключами enabled, spark_conf, openlineage_jar,
         либо None, если конфиг прочитать не удалось или его форма неверна;
@@ -89,16 +115,28 @@ def _cfg() -> dict[str, object] | None:
     return parsed
 
 
-@functools.lru_cache(maxsize=1)
 def _validate_cfg() -> Config | None:
-    """Проверяет годность Variable один раз на процесс: недостающие поля — одним warning'ом.
+    """Проверяет годность Variable, с TTL-мемо на процесс: недостающие поля — одним warning'ом.
 
-    Аргументов нет намеренно: под ``lru_cache`` они хэшируются, а разобранный
-    конфиг — dict, и любой вызов упал бы с ``TypeError: unhashable type``.
+    TTL тот же, что у ``_cfg``, и завязан на тот же ``_now`` — валидированный
+    конфиг протухает вместе с сырым.
 
     :return: проверенный конфиг либо None, если он непригоден для включения лайниджа.
     """
-    cfg = _cfg()
+    global _validated_memo
+    if _validated_memo is not None and _now() - _validated_memo[0] < _TTL_SEC:
+        return _validated_memo[1]
+    value = _validate(_cfg())
+    _validated_memo = (_now(), value)
+    return value
+
+
+def _validate(cfg: dict[str, object] | None) -> Config | None:
+    """Проверяет годность разобранного конфига: недостающие поля — одним warning'ом.
+
+    :param cfg: конфиг, разобранный ``_cfg``, либо None.
+    :return: проверенный конфиг либо None, если он непригоден для включения лайниджа.
+    """
     if cfg is None:
         return None
     spark_conf_obj: object = cfg.get("spark_conf", {})
@@ -127,3 +165,13 @@ def _validate_cfg() -> Config | None:
         )
         return None
     return config
+
+
+def reset() -> None:
+    """Сбрасывает мемо конфига — для изоляции тестов.
+
+    :return: None.
+    """
+    global _cfg_memo, _validated_memo
+    _cfg_memo = None
+    _validated_memo = None

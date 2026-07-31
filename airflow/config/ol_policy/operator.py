@@ -52,6 +52,15 @@ def passthrough_exceptions() -> tuple[type[BaseException], ...]:
     return _passthrough_cache
 
 
+def reset() -> None:
+    """Сбрасывает кэш классов исключений — для изоляции тестов.
+
+    :return: None.
+    """
+    global _passthrough_cache
+    _passthrough_cache = None
+
+
 def operator_attrs(task: object) -> OperatorAttrs | None:
     """Имена атрибутов conf и jars у этого оператора.
 

@@ -31,3 +31,11 @@ def warn_once(key: tuple[str, ...], msg: str, *args: object, exc_info: bool = Fa
         return
     _warned[key] = now
     logger.warning(msg, *args, exc_info=exc_info)
+
+
+def reset() -> None:
+    """Сбрасывает дедупликацию warning'ов — для изоляции тестов.
+
+    :return: None.
+    """
+    _warned.clear()

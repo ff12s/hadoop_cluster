@@ -264,3 +264,11 @@ def jar_available(jar_uri: str, path: str) -> bool:
 
     _jar_memo[jar_uri] = (available, _now(), ttl)
     return available
+
+
+def reset() -> None:
+    """Сбрасывает мемо зонда — для изоляции тестов.
+
+    :return: None.
+    """
+    _jar_memo.clear()

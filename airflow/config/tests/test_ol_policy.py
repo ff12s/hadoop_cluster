@@ -222,11 +222,16 @@ def requests_log(monkeypatch: pytest.MonkeyPatch) -> Callable[[Callable[[object]
 def clock(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     """Подменяет модульный источник времени политики управляемым счётчиком.
 
+    Оба TTL-мемо пакета (зонд jar'а и конфиг Variable) реэкспортируют
+    ``utils.now`` под именем ``_now`` — фикстура подменяет обе точки одним
+    и тем же счётчиком.
+
     :param monkeypatch: фикстура подмены.
     :return: объект с полем ``now``, которое тест двигает вперёд.
     """
     state = SimpleNamespace(now=1000.0)
     monkeypatch.setattr(ol_policy.probe, "_now", lambda: state.now)
+    monkeypatch.setattr(ol_policy.variable, "_now", lambda: state.now)
     return state
 
 
@@ -1235,11 +1240,11 @@ def test_validate_cfg_aggregates_missing_fields(
     assert aggregated, f"ожидался агрегированный warning, получили: {messages}"
 
 
-def test_validate_cfg_runs_once_per_process(
+def test_validate_cfg_runs_once_per_ttl(
     variable: Callable[..., SimpleNamespace], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Четыре вызова ol_macro подряд — один проход _validate_cfg (мемо)."""
-    variable(raw=json.dumps({
+    """Четыре вызова ol_macro подряд — один проход _validate_cfg (TTL-мемо ещё живо)."""
+    state = variable(raw=json.dumps({
         "enabled": True,
         "spark_conf": {
             "spark.extraListeners": "io.example.L",
@@ -1264,7 +1269,45 @@ def test_validate_cfg_runs_once_per_process(
     ol_policy.ol_macro("jar")
 
     assert calls["n"] == 4
-    assert original.cache_info().misses == 1
+    assert state.calls == 1  # Variable.get вызван один раз — мемо не протухло
+
+
+def test_cfg_memo_expires_by_ttl(
+    variable: Callable[..., SimpleNamespace],
+    clock: SimpleNamespace,
+) -> None:
+    """По истечении TTL Variable перечитывается — правка подхватывается."""
+    state = variable(raw=SEEDED_VARIABLE)
+    assert ol_policy.variable._cfg() is not None
+    first = state.calls
+    assert ol_policy.variable._cfg() is not None
+    assert state.calls == first  # мемо живо
+
+    clock.now += ol_policy.variable._TTL_SEC + 1
+    assert ol_policy.variable._cfg() is not None
+    assert state.calls == first + 1  # протухло — перечитали
+
+
+def test_validate_cfg_follows_cfg_ttl(
+    variable: Callable[..., SimpleNamespace],
+    clock: SimpleNamespace,
+) -> None:
+    """Валидированный конфиг протухает вместе с сырым."""
+    variable(raw=SEEDED_VARIABLE)
+    assert ol_policy.variable._validate_cfg() is not None
+
+    variable(raw="{not json")
+    clock.now += ol_policy.variable._TTL_SEC + 1
+    assert ol_policy.variable._validate_cfg() is None
+
+
+def test_reset_state_calls_module_resets(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Агрегатор зовёт reset() каждого модуля и не лезет в приватные поля."""
+    called: list[str] = []
+    for name in ("logger", "variable", "probe", "operator"):
+        monkeypatch.setattr(getattr(ol_policy, name), "reset", lambda name=name: called.append(name))
+    ol_policy.reset_state()
+    assert sorted(called) == ["logger", "operator", "probe", "variable"]
 
 
 # ---------------------------------------------------------------------------
