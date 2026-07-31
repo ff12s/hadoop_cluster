@@ -156,6 +156,35 @@ if errorlevel 1 (
 )
 echo Marquez lineage OK
 
+echo.
+echo 11) Cluster policy: OL-ключи и оба jar'а в фактически собранной команде...
+rem Команду строит тот же код провайдера, что и при запуске таски. Проверяем
+rem канал доставки jar: наш jar обязан ехать в том же --jars, что и jar DAG'а,
+rem заданный и атрибутом jars, и conf["spark.jars"]. apply_policy работает на
+rem парсе и пишет вызов макроса, а не готовое значение - jar-URI появится
+rem только после рендера Jinja на воркере, поэтому здесь проверяем сам вызов
+rem макроса (__openlineage_v1), а не его результат.
+docker exec %AIRFLOW% python -c "import pendulum; from airflow.models import DAG; from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator; import ol_policy; d = DAG('policy_smoke', schedule=None, start_date=pendulum.datetime(2024, 1, 1)); t = SparkSubmitOperator(task_id='t', application='/opt/airflow/jobs/pyspark_pi.py', conn_id='spark_yarn', jars='mine.jar', conf={'spark.jars': 'other.jar'}, dag=d); ol_policy.apply_policy(t); a = ol_policy.operator_attrs(t); cmd = ' '.join(t._get_hook()._build_spark_submit_command(getattr(t, '_application', None) or t.application)); assert 'spark.extraListeners' in cmd, cmd; assert 'mine.jar' in cmd and 'other.jar' in cmd, cmd; assert '__openlineage_v1' in cmd, cmd; assert getattr(t, a.conf)['spark.jars'] == 'other.jar', 'conf[spark.jars] must stay untouched'; print('policy jars OK')" || (
+  echo [ERROR] Cluster policy did not inject OpenLineage or lost DAG jars
+  goto :fail
+)
+
+echo.
+echo 12) Cluster policy: params openlineage=False убирает листенер из команды...
+docker exec %AIRFLOW% python -c "import pendulum; from airflow.models import DAG; from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator; import ol_policy; d = DAG('policy_smoke_off', schedule=None, start_date=pendulum.datetime(2024, 1, 1)); t = SparkSubmitOperator(task_id='t', application='/opt/airflow/jobs/pyspark_pi.py', conn_id='spark_yarn', params={'openlineage': False}, dag=d); ol_policy.apply_policy(t); cmd = ' '.join(t._get_hook()._build_spark_submit_command(getattr(t, '_application', None) or t.application)); assert 'extraListeners' not in cmd, cmd; assert 'openlineage' not in cmd, cmd; print('policy toggle OK')" || (
+  echo [ERROR] params openlineage=False did not disable the listener
+  goto :fail
+)
+
+echo.
+echo 13) Variable openlineage_config подхватывается без рестарта...
+docker exec %AIRFLOW% python -c "import json; from airflow.models import Variable; import ol_policy; Variable.set('openlineage_config', json.dumps({'enabled': True, 'spark_conf': {'spark.extraListeners': 'io.openlineage.spark.agent.OpenLineageSparkListener', 'spark.openlineage.transport.type': 'http', 'spark.openlineage.transport.url': 'http://marquez:5000', 'spark.openlineage.namespace': 'smoke-ns', 'spark.openlineage.columnLineage.datasetLineageEnabled': 'true'}, 'openlineage_jar': 'hdfs://namenode:9000/opt/openlineage/openlineage-spark_2.13-1.46.0.jar'})); ol_policy.reset_state(); assert ol_policy.ol_macro('namespace') == 'smoke-ns', 'Variable edit was not picked up'; print('variable pickup OK')" || (
+  echo [ERROR] Variable openlineage_config is not picked up by the macro
+  call :restore_variable
+  goto :fail
+)
+call :restore_variable || goto :fail
+
 del "%OUT%" 2>nul
 echo.
 echo ========================================
@@ -193,6 +222,17 @@ if not "%PAUSED%"=="1" exit /b 0
 docker exec %AIRFLOW% airflow dags unpause spark_pi_dag >nul 2>&1
 docker exec %AIRFLOW% airflow dags unpause spark_etl_dag >nul 2>&1
 set "PAUSED=0"
+exit /b 0
+
+:restore_variable
+rem Возвращаем Variable к засеянному значению: шаг 13 правит её намеренно.
+rem Форма и литералы обязаны совпадать с сидингом в airflow/scripts/start-airflow.sh -
+rem источник значений один, дублировать env-переменные под него незачем.
+docker exec %AIRFLOW% python -c "import json; from airflow.models import Variable; Variable.set('openlineage_config', json.dumps({'enabled': True, 'spark_conf': {'spark.extraListeners': 'io.openlineage.spark.agent.OpenLineageSparkListener', 'spark.openlineage.transport.type': 'http', 'spark.openlineage.transport.url': 'http://marquez:5000', 'spark.openlineage.namespace': 'hadoop-cluster', 'spark.openlineage.columnLineage.datasetLineageEnabled': 'true'}, 'openlineage_jar': 'hdfs://namenode:9000/opt/openlineage/openlineage-spark_2.13-1.46.0.jar'}))" >nul 2>&1
+if errorlevel 1 (
+  echo [ERROR] Failed to restore Variable openlineage_config
+  exit /b 1
+)
 exit /b 0
 
 :assert_tasks
