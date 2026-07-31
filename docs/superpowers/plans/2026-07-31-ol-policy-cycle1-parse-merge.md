@@ -439,8 +439,8 @@ def test_emit_with_none_channel_prefixes_comma() -> None:
 
 
 def test_emit_uses_the_merge_it_was_given() -> None:
-    """Ветка jar использует merge_jars — сплит и дедуп по тем же правилам."""
-    merged = ol_policy._emit("hdfs://n:9000/o.jar", "a.jar", ol_policy.merge_jars, "spark.jars")
+    """Ветка jar использует свой мердж — сплит и дедуп по тем же правилам."""
+    merged = ol_policy._emit("hdfs://n:9000/o.jar", "a.jar", ol_policy._merge_jars_pair, "spark.jars")
 
     assert merged == "a.jar,hdfs://n:9000/o.jar"
 ```
@@ -487,30 +487,28 @@ def _emit(value: str, dag_cur: str | None, merge: Callable[[object, object], str
 
 `_logger` уже импортирован в шапке модуля строкой `from .logger import logger as _logger`.
 
-`merge_jars` объявлена как `merge_jars(current, conf_jars, jar)` — три аргумента, поэтому напрямую в `_emit` она не подходит. Реэкспорт в `__init__.py` заменить на адаптер:
+`utils.merge_jars` объявлена как `merge_jars(current, conf_jars, jar)` — три аргумента, поэтому под тип `merge` в `_emit` она не подходит. Добавить рядом с `_emit` узкую обёртку **с отдельным именем** (одноимённая двухаргументная функция затеняла бы трёхаргументную и путала бы читателя):
 
 ```python
-# Реэкспорт утилит: тесты и вызывающий код обращаются к ним через пакет политики.
-merge_listeners = utils.merge_listeners
+def _merge_jars_pair(dag_cur: object, our_jar: object) -> str:
+    """Мердж двух источников jar'ов — форма, которую ждёт ``_emit``.
 
+    Третий канал (``conf["spark.jars"]``) склеен с атрибутом ``jars`` ещё на
+    парсе, поэтому на рендере источников ровно два.
 
-def merge_jars(dag_cur: object, our_jar: object) -> str:
-    """Двухаргументный мердж jar'ов для ``_emit``.
-
-    Третий канал (``conf["spark.jars"]``) склеивается с атрибутом ``jars`` ещё
-    на парсе, поэтому на рендере источников ровно два.
-
-    :param dag_cur: уже склеенные на парсе jar'ы DAG'а.
+    :param dag_cur: склеенные на парсе jar'ы DAG'а.
     :param our_jar: URI openlineage-spark jar'а.
     :return: список jar'ов через запятую, без дубликатов, с сохранением порядка.
     """
     return utils.merge_jars(dag_cur, None, our_jar if isinstance(our_jar, str) else "")
 ```
 
+Реэкспорты в конце модуля остаются трёхаргументными и неизменными: `merge_jars = utils.merge_jars` (из Task 1), `merge_listeners = utils.merge_listeners` (из Task 2).
+
 - [ ] **Step 4: Прогнать тесты ветки**
 
 Run: `cd airflow/config && python -m pytest tests/test_ol_policy.py -q -k "emit or merge_jars or merge_listeners" --tb=short`
-Expected: PASS. Существующие `test_merge_jars_*` зовут `ol_policy.merge_jars` с тремя источниками — проверить, что они по-прежнему проходят; если они вызывают трёхаргументную форму, заменить в них вызов на `ol_policy.utils.merge_jars`.
+Expected: PASS. Существующие `test_merge_jars_*` зовут трёхаргументную `ol_policy.merge_jars` — их править не нужно, реэкспорт остался прежним.
 
 - [ ] **Step 5: Commit**
 
@@ -809,23 +807,26 @@ def test_macro_jar_rejects_uri_without_scheme(
 def test_macro_jar_probes_once_per_uri(
     variable: Callable[..., SimpleNamespace], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Два вызова макроса — один поход в сеть (мемо по URI)."""
+    """Два вызова макроса — один поход в сеть: мемо по URI держит результат."""
     _variable_full(variable)
-    calls: list[str] = []
+    probed: list[str] = []
 
-    def _probe(jar_uri: str, path: str) -> bool:
-        calls.append(jar_uri)
+    def _counting_probe(path: str) -> bool:
+        """Считает походы в HDFS и всегда подтверждает jar.
+
+        :param path: путь jar'а внутри HDFS.
+        :return: True.
+        """
+        probed.append(path)
         return True
 
-    monkeypatch.setattr(ol_policy, "_probe", lambda path: True)
-    monkeypatch.setattr(ol_policy, "resolve_webhdfs_urls", lambda: ["http://namenode:9870"])
-    monkeypatch.setattr(ol_policy, "_query_endpoint", lambda endpoint, path: "found")
+    monkeypatch.setattr(ol_policy, "_probe", _counting_probe)
 
-    ol_policy.ol_macro("jar", None, "")
-    ol_policy.ol_macro("jar", None, "")
+    first = ol_policy.ol_macro("jar", None, "")
+    second = ol_policy.ol_macro("jar", None, "")
 
-    del calls, _probe
-    assert ol_policy._jar_memo  # результат зонда лёг в мемо
+    assert first == second == "hdfs://namenode:9000/o.jar"
+    assert probed == ["/o.jar"]
 ```
 
 - [ ] **Step 2: Прогнать RED**
@@ -867,7 +868,7 @@ def _resolve_jar(cfg: dict[str, object], dag_cur: str | None) -> str:
             jar_uri,
         )
         return ""
-    return _emit(jar_uri, dag_cur, merge_jars, "spark.jars")
+    return _emit(jar_uri, dag_cur, _merge_jars_pair, "spark.jars")
 ```
 
 - [ ] **Step 4: Прогнать тесты ветки**
@@ -1516,11 +1517,11 @@ git commit -m "docs: describe the new openlineage_config Variable shape and merg
 - `_resolve_jar(cfg: dict[str, object], dag_cur: str | None) -> str` — заглушка в Task 6, реализация в Task 7, сигнатура одна.
 - `ol_macro(field: str, forced: bool | None = None, dag_cur: str | None = "") -> str` — Task 6; Task 9 передаёт третьим аргументом результат `_dag_channel`.
 - `utils.merge_listeners(dag_cur: object, our_listener: object) -> str` — Task 2; двухаргументная, подходит под тип `merge` в `_emit`.
-- `ol_policy.merge_jars(dag_cur: object, our_jar: object) -> str` — адаптер из Task 5 поверх трёхаргументной `utils.merge_jars(current, conf_jars, jar)`. В Task 9 парс зовёт **трёхаргументную** `utils.merge_jars(...)` напрямую — имена различаются намеренно, разница отмечена в обеих задачах.
+- `_merge_jars_pair(dag_cur: object, our_jar: object) -> str` — обёртка из Task 5 поверх трёхаргументной `utils.merge_jars(current, conf_jars, jar)`, нужна только чтобы подойти под тип `merge` в `_emit`. Имя отдельное намеренно: одноимённая двухаргументная функция затеняла бы реэкспорт `merge_jars = utils.merge_jars` и ломала бы существующие тесты. В Task 9 парс зовёт трёхаргументную `utils.merge_jars(...)` напрямую.
 - `_validate_cfg() -> dict[str, object] | None` — Task 4, без аргументов; потребляется в Task 6.
 
 **4. Каверзы, отмеченные в задачах.**
 
-- Существующие `test_merge_jars_*` зовут `ol_policy.merge_jars` с тремя источниками, а Task 5 делает одноимённый двухаргументный адаптер — Task 5 Step 4 требует перевести эти тесты на `ol_policy.utils.merge_jars`.
+- `_emit` принимает двухаргументный мердж, а `utils.merge_jars` — трёхаргументная. Task 5 добавляет обёртку `_merge_jars_pair` под отдельным именем; реэкспорт `merge_jars` остаётся трёхаргументным, существующие `test_merge_jars_*` не трогаются.
 - `test_validate_cfg_runs_once_per_process` в наборе написан под отменённый контракт с аргументом; Task 4 Step 1 переписывает его и объясняет, почему проверка идёт по `cache_info().misses`.
 - Ветка `jar` в `ol_macro` появляется в Task 6 раньше своей реализации, поэтому Task 6 ставит заглушку с той же сигнатурой, а Task 7 её заменяет.
