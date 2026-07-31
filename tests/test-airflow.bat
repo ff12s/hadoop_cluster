@@ -164,7 +164,10 @@ rem заданный и атрибутом jars, и conf["spark.jars"]. apply_po
 rem парсе и пишет вызов макроса, а не готовое значение - jar-URI появится
 rem только после рендера Jinja на воркере, поэтому здесь проверяем сам вызов
 rem макроса (__openlineage_v1), а не его результат.
-docker exec %AIRFLOW% python -c "import pendulum; from airflow.models import DAG; from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator; import ol_policy; d = DAG('policy_smoke', schedule=None, start_date=pendulum.datetime(2024, 1, 1)); t = SparkSubmitOperator(task_id='t', application='/opt/airflow/jobs/pyspark_pi.py', conn_id='spark_yarn', jars='mine.jar', conf={'spark.jars': 'other.jar'}, dag=d); ol_policy.apply_policy(t); a = ol_policy.operator_attrs(t); cmd = ' '.join(t._get_hook()._build_spark_submit_command(getattr(t, '_application', None) or t.application)); assert 'spark.extraListeners' in cmd, cmd; assert 'mine.jar' in cmd and 'other.jar' in cmd, cmd; assert '__openlineage_v1' in cmd, cmd; assert getattr(t, a.conf)['spark.jars'] == 'other.jar', 'conf[spark.jars] must stay untouched'; print('policy jars OK')" || (
+rem Вход - через airflow_local_settings.task_policy: именно этот модуль Airflow
+rem ищет по имени, и только он доказывает, что политика вообще подключена.
+rem Прямой вызов ol_policy.apply_policy проверял бы код в обход точки входа.
+docker exec %AIRFLOW% python -c "import pendulum; from airflow.models import DAG; from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator; import ol_policy; import airflow_local_settings; d = DAG('policy_smoke', schedule=None, start_date=pendulum.datetime(2024, 1, 1)); t = SparkSubmitOperator(task_id='t', application='/opt/airflow/jobs/pyspark_pi.py', conn_id='spark_yarn', jars='mine.jar', conf={'spark.jars': 'other.jar'}, dag=d); airflow_local_settings.task_policy(t); a = ol_policy.operator_attrs(t); cmd = ' '.join(t._get_hook()._build_spark_submit_command(getattr(t, '_application', None) or t.application)); assert 'spark.extraListeners' in cmd, cmd; assert 'mine.jar' in cmd and 'other.jar' in cmd, cmd; assert '__openlineage_v1' in cmd, cmd; assert getattr(t, a.conf)['spark.jars'] == 'other.jar', 'conf[spark.jars] must stay untouched'; print('policy jars OK')" || (
   echo [ERROR] Cluster policy did not inject OpenLineage or lost DAG jars
   goto :fail
 )
