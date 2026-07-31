@@ -51,6 +51,15 @@
   получил публичный `reset()`; `ol_policy.reset_state()` стал чистым агрегатором — зовёт только их,
   не залезая в приватные поля модулей напрямую.
 
+### Известные ограничения
+
+- `airflow tasks run --read-from-db` (Airflow 2.10+) минует cluster policy — `on_execute_callback` не
+  навешивается, и лайнидж не инжектится. Используйте CLI без этого флага или полноценный запуск DAG'а.
+- **Rendered Templates** в UI (Admin → DAG → Task → Rendered Templates) не показывает OL-ключи
+  (`spark.extraListeners`, `spark.openlineage.transport.url`, `spark.openlineage.namespace`),
+  потому что инъекция происходит в колбэке после сохранения Rendered Template Instances в БД.
+  Итоговые значения можно видеть в логе задачи.
+
 ### Удалено
 
 - Переменные окружения `OPENLINEAGE_URL`, `OPENLINEAGE_NAMESPACE`, `OPENLINEAGE_JAR` — со стороны
