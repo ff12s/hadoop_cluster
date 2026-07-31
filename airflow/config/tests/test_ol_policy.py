@@ -1092,29 +1092,33 @@ def test_validate_cfg_aggregates_missing_fields(
 def test_validate_cfg_runs_once_per_process(
     variable: Callable[..., SimpleNamespace], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """_validate_cfg кэшируется на уровне процесса (lru_cache)."""
-    variable(
-        raw=json.dumps(
-            {
-                "enabled": True,
-                "spark_conf": {
-                    "spark.extraListeners": "io.example.L",
-                    "spark.openlineage.transport.url": "http://marquez:5000",
-                    "spark.openlineage.namespace": "ns",
-                },
-                "openlineage_jar": JAR,
-            }
-        )
-    )
+    """Четыре вызова ol_macro подряд — один проход _validate_cfg (мемо)."""
+    variable(raw=json.dumps({
+        "enabled": True,
+        "spark_conf": {
+            "spark.extraListeners": "io.example.L",
+            "spark.openlineage.transport.url": "http://m:5000",
+            "spark.openlineage.namespace": "ns",
+        },
+        "openlineage_jar": "hdfs://n:9000/o.jar",
+    }))
+    calls = {"n": 0}
+    original = ol_policy._validate_cfg
 
-    ol_policy._validate_cfg.cache_clear()
+    def _counted() -> object:
+        calls["n"] += 1
+        return original()
+
+    monkeypatch.setattr(ol_policy, "_validate_cfg", _counted)
+    monkeypatch.setattr(ol_policy, "jar_available", lambda jar_uri, path: True)
+
     ol_policy.ol_macro("listener")
     ol_policy.ol_macro("url")
     ol_policy.ol_macro("namespace")
     ol_policy.ol_macro("jar")
 
-    assert ol_policy._validate_cfg.cache_info().hits == 3
-    assert ol_policy._validate_cfg.cache_info().misses == 1
+    assert calls["n"] == 4
+    assert original.cache_info().misses == 1
 
 
 # ---------------------------------------------------------------------------

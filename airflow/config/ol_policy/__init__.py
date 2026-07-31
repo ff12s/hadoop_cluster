@@ -224,8 +224,9 @@ def _cfg() -> dict[str, object] | None:
     переиспользуемыми процессами мемо становится кэшем без TTL — правка Variable
     подхватится только следующим процессом.
 
-    :return: разобранный объект конфига (в том числе пустой) либо None, если
-        конфиг прочитать не удалось; причина в этом случае уже записана в лог.
+    :return: разобранный конфиг с ключами enabled, spark_conf, openlineage_jar,
+        либо None, если конфиг прочитать не удалось или его форма неверна;
+        причина в этом случае уже записана в лог.
     """
     try:
         from airflow.models import Variable
@@ -262,6 +263,40 @@ def _cfg() -> dict[str, object] | None:
         )
         return None
     return parsed
+
+
+@functools.lru_cache(maxsize=1)
+def _validate_cfg() -> dict[str, object] | None:
+    """Проверяет годность Variable один раз на процесс: недостающие поля — одним warning'ом.
+
+    Аргументов нет намеренно: под ``lru_cache`` они хэшируются, а разобранный
+    конфиг — dict, и любой вызов упал бы с ``TypeError: unhashable type``.
+
+    :return: конфиг из ``_cfg``, либо None, если он непригоден для включения лайниджа.
+    """
+    cfg = _cfg()
+    if cfg is None:
+        return None
+    spark_conf_obj: object = cfg.get("spark_conf", {})
+    spark_conf: dict[str, object] = spark_conf_obj if isinstance(spark_conf_obj, dict) else {}
+    missing: list[str] = []
+    if not _clean(spark_conf.get("spark.extraListeners")):
+        missing.append("spark_conf.spark.extraListeners (непустая строка)")
+    if not _clean(spark_conf.get("spark.openlineage.transport.url"), require_scheme=True):
+        missing.append("spark_conf.spark.openlineage.transport.url (http/https URL)")
+    if not _clean(spark_conf.get("spark.openlineage.namespace")):
+        missing.append("spark_conf.spark.openlineage.namespace (непустая строка)")
+    jar_uri = cfg.get("openlineage_jar")
+    if not (isinstance(jar_uri, str) and jar_uri.strip()):
+        missing.append("openlineage_jar (hdfs://... URI)")
+    if missing:
+        logger.warn_once(
+            ("var-incomplete",),
+            "OpenLineage не включён: Variable openlineage_config неполна: %s",
+            ", ".join(missing),
+        )
+        return None
+    return cfg
 
 
 def ol_macro(field: str, forced: bool | None = None) -> str:
@@ -574,6 +609,7 @@ def reset_state() -> None:
     global _passthrough_cache
     logger._warned.clear()
     _cfg.cache_clear()
+    _validate_cfg.cache_clear()
     _jar_memo.clear()
     _passthrough_cache = None
 
