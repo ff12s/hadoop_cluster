@@ -368,7 +368,11 @@ def _scalar(value: str, dag_cur: str | None, key: str) -> str:
     :return: значение из Variable; "" если оно негодно.
     """
     if not value:
-        logger.warn_once(("bad-field",), "OpenLineage не включён: в Variable openlineage_config негодно поле %s", key)
+        logger.warn_once(
+            ("bad-field", key),
+            "OpenLineage не включён: в Variable openlineage_config негодно поле %s",
+            key,
+        )
         return ""
     if dag_cur:
         _logger.info("ol_policy: %s в DAG-conf=%s переопределяется OL-значением=%s", key, dag_cur, value)
@@ -377,11 +381,47 @@ def _scalar(value: str, dag_cur: str | None, key: str) -> str:
     return value
 
 
-def _resolve_jar(cfg: dict[str, object], dag_cur: str | None) -> str:
-    """Проверяет наличие jar'а в HDFS и оформляет URI под канал DAG-значения.
+def _jar_ok(cfg: dict[str, object], *, log: bool = False) -> bool:
+    """Подтверждён ли openlineage-jar в HDFS — общий гейт всего лайниджа.
 
-    Мемо ``jar_available`` живёт на процессе воркера: поток тасок с одним и тем же
-    URI не перегаживает кластер запросами.
+    Инвариант 19: ``spark.extraListeners`` без jar'а на classpath роняет драйвер
+    ``ClassNotFoundException``, поэтому неподтверждённый jar выключает лайнидж
+    целиком, а не одну только ветку ``jar``. Зонд мемоизирован по URI, так что
+    четыре ветки макроса за один рендер стоят одного похода в сеть, а порядок
+    рендера ``conf`` и ``jars`` перестаёт что-либо значить.
+
+    :param cfg: разобранный конфиг из ``_validate_cfg``.
+    :param log: писать ли причину отказа. True только у ветки ``jar``: иначе три
+        остальные ветки того же рендера продублировали бы одно сообщение.
+    :return: True, если jar подтверждён в HDFS; False при любом отказе.
+    """
+    jar_uri_obj = cfg.get("openlineage_jar")
+    jar_uri = jar_uri_obj.strip() if isinstance(jar_uri_obj, str) else ""
+    if not jar_uri:
+        if log:
+            _logger.warning("OpenLineage не включён: openlineage_jar в Variable не задан")
+        return False
+    path = jar_path(jar_uri)
+    if path is None:
+        if log:
+            _logger.warning("OpenLineage не включён: openlineage_jar задан без схемы или без пути (%s)", jar_uri)
+        return False
+    if not jar_available(jar_uri, path):
+        if log:
+            _logger.warning(
+                "OpenLineage не включён: jar отсутствует или недоступен в HDFS (%s). "
+                "Залейте его: scripts/seed-openlineage-jar.bat",
+                jar_uri,
+            )
+        return False
+    return True
+
+
+def _resolve_jar(cfg: dict[str, object], dag_cur: str | None) -> str:
+    """Оформляет URI подтверждённого jar'а под канал DAG-значения.
+
+    Ветка ``jar`` — единственная, которая называет причину отказа зонда: остальные
+    три гейтятся тем же ``_jar_ok`` молча, чтобы один отказ не звучал четырежды.
 
     :param cfg: разобранный конфиг из ``_validate_cfg``.
     :param dag_cur: канал DAG-значения jar'ов, выбранный парсом.
@@ -389,27 +429,10 @@ def _resolve_jar(cfg: dict[str, object], dag_cur: str | None) -> str:
         собственное значение DAG'а (``dag_cur``, когда это строка, иначе ""), а не
         пустая строка: отсутствующий в HDFS jar не должен стирать чужой ``jars=``.
     """
+    if not _jar_ok(cfg, log=True):
+        return _refusal(dag_cur)
     jar_uri_obj = cfg.get("openlineage_jar")
     jar_uri = jar_uri_obj.strip() if isinstance(jar_uri_obj, str) else ""
-    if not jar_uri:
-        logger.warn_once(("jar-unset",), "OpenLineage не включён: openlineage_jar в Variable не задан")
-        return _refusal(dag_cur)
-    path = jar_path(jar_uri)
-    if path is None:
-        logger.warn_once(
-            ("jar-malformed",),
-            "OpenLineage не включён: openlineage_jar задан без схемы или без пути (%s)",
-            jar_uri,
-        )
-        return _refusal(dag_cur)
-    if not jar_available(jar_uri, path):
-        logger.warn_once(
-            ("jar-absent",),
-            "OpenLineage не включён: jar отсутствует или недоступен в HDFS (%s). "
-            "Залейте его: scripts/seed-openlineage-jar.bat",
-            jar_uri,
-        )
-        return _refusal(dag_cur)
     return _emit(jar_uri, dag_cur, _merge_jars_pair, "spark.jars")
 
 
@@ -417,7 +440,9 @@ def ol_macro(field: str, forced: bool | None = None, dag_cur: str | None = "") -
     """Рендер-функция: единственный источник значений лайниджа. Зовётся Jinja на воркере.
 
     Не бросает никогда: битый конфиг обязан давать «лайниджа нет», а не падение
-    рендера всей таски.
+    рендера всей таски. Все четыре ветки гейтятся зондом jar'а (инвариант 19):
+    неподтверждённый в HDFS jar выключает лайнидж целиком, иначе listener уехал бы
+    в conf без своего класса на classpath и уронил драйвер.
 
     :param field: "listener", "url", "namespace" либо "jar".
     :param forced: True — DAG форсировал включение, False — форс-выключение, None — форса нет.
@@ -442,6 +467,15 @@ def ol_macro(field: str, forced: bool | None = None, dag_cur: str | None = "") -
     cfg = _validate_cfg()
     if cfg is None:
         return _refusal(dag_cur)
+    if field == "jar":
+        return _resolve_jar(cfg, dag_cur)
+    if field not in ("listener", "url", "namespace"):
+        _logger.info("ol_policy: неизвестное поле макроса %s — подстановки нет", field)
+        return _refusal(dag_cur)
+    # Инвариант 19: нет jar'а — нет и лайниджа. Listener без jar'а на classpath
+    # роняет драйвер, то есть отказ зонда обязан гасить все ветки, а не одну.
+    if not _jar_ok(cfg):
+        return _refusal(dag_cur)
     spark_conf_obj: object = cfg.get("spark_conf", {})
     spark_conf: dict[str, object] = spark_conf_obj if isinstance(spark_conf_obj, dict) else {}
     if field == "listener":
@@ -449,13 +483,8 @@ def ol_macro(field: str, forced: bool | None = None, dag_cur: str | None = "") -
     if field == "url":
         return _scalar(_clean(spark_conf.get("spark.openlineage.transport.url"), require_scheme=True),
                        dag_cur, "spark.openlineage.transport.url")
-    if field == "namespace":
-        return _scalar(_clean(spark_conf.get("spark.openlineage.namespace")), dag_cur,
-                       "spark.openlineage.namespace")
-    if field == "jar":
-        return _resolve_jar(cfg, dag_cur)
-    _logger.info("ol_policy: неизвестное поле макроса %s — подстановки нет", field)
-    return ""
+    return _scalar(_clean(spark_conf.get("spark.openlineage.namespace")), dag_cur,
+                   "spark.openlineage.namespace")
 
 
 # ---------------------------------------------------------------------------

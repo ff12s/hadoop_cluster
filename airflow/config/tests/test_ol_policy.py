@@ -1098,7 +1098,9 @@ def test_validate_cfg_runs_once_per_process(
 # ---------------------------------------------------------------------------
 
 
-def test_macro_returns_values(variable: Callable[..., SimpleNamespace]) -> None:
+def test_macro_returns_values(
+    variable: Callable[..., SimpleNamespace], jar_ok: list[tuple[str, str]]
+) -> None:
     """Полный конфиг: макрос отдаёт listener/url/namespace из spark_conf."""
     variable(
         raw=json.dumps(
@@ -1119,7 +1121,9 @@ def test_macro_returns_values(variable: Callable[..., SimpleNamespace]) -> None:
     assert ol_policy.ol_macro("namespace") == "hadoop-cluster"
 
 
-def test_macro_trims_values(variable: Callable[..., SimpleNamespace]) -> None:
+def test_macro_trims_values(
+    variable: Callable[..., SimpleNamespace], jar_ok: list[tuple[str, str]]
+) -> None:
     """Годные значения попадают в conf обрезанными."""
     variable(
         raw=json.dumps(
@@ -1243,6 +1247,15 @@ def test_macro_refusal_does_not_double_none_channel(variable: Callable[..., Simp
     assert ol_policy.ol_macro("listener", None, None) == ""
 
 
+def test_macro_unknown_field_keeps_dag_value(
+    variable: Callable[..., SimpleNamespace], probe_forbidden: None
+) -> None:
+    """Инвариант 18: даже незнакомое поле не стирает то, что DAG задал сам."""
+    _variable_full(variable)
+
+    assert ol_policy.ol_macro("нет-такого-поля", None, "com.example.A") == "com.example.A"
+
+
 @pytest.mark.parametrize(
     "raw",
     [
@@ -1321,7 +1334,9 @@ def test_force_does_not_bypass_config_validation(
     assert any("url" in message for message in warnings_of(caplog))
 
 
-def test_force_enables_without_enabled_flag(variable: Callable[..., SimpleNamespace]) -> None:
+def test_force_enables_without_enabled_flag(
+    variable: Callable[..., SimpleNamespace], jar_ok: list[tuple[str, str]]
+) -> None:
     """Форс включает лайнидж при годных url и namespace без ``enabled: true``."""
     variable(
         raw=json.dumps(
@@ -1371,7 +1386,9 @@ def test_config_values_never_reach_the_log(
     assert "secret-host" not in joined
 
 
-def test_macro_listener_comes_from_variable(variable: Callable[..., SimpleNamespace]) -> None:
+def test_macro_listener_comes_from_variable(
+    variable: Callable[..., SimpleNamespace], jar_ok: list[tuple[str, str]]
+) -> None:
     """Listener берётся из Variable.spark_conf.spark.extraListeners, не из хардкода."""
     variable(
         raw=json.dumps(
@@ -1408,14 +1425,18 @@ def _variable_full(variable: Callable[..., SimpleNamespace], listener: str = "io
     }))
 
 
-def test_macro_listener_without_dag_value(variable: Callable[..., SimpleNamespace]) -> None:
+def test_macro_listener_without_dag_value(
+    variable: Callable[..., SimpleNamespace], jar_ok: list[tuple[str, str]]
+) -> None:
     """Канал '': listener берётся из Variable и возвращается без разделителя."""
     _variable_full(variable)
 
     assert ol_policy.ol_macro("listener", None, "") == "io.ol.L"
 
 
-def test_macro_listener_merges_literal_dag_csv(variable: Callable[..., SimpleNamespace]) -> None:
+def test_macro_listener_merges_literal_dag_csv(
+    variable: Callable[..., SimpleNamespace], jar_ok: list[tuple[str, str]]
+) -> None:
     """Канал-литерал: DAG-listener'ы первыми, наш последним."""
     _variable_full(variable)
 
@@ -1424,14 +1445,18 @@ def test_macro_listener_merges_literal_dag_csv(variable: Callable[..., SimpleNam
     assert merged == "com.example.A,com.example.B,io.ol.L"
 
 
-def test_macro_listener_dedups_our_class(variable: Callable[..., SimpleNamespace]) -> None:
+def test_macro_listener_dedups_our_class(
+    variable: Callable[..., SimpleNamespace], jar_ok: list[tuple[str, str]]
+) -> None:
     """DAG уже назвал наш класс — второй раз он не появляется."""
     _variable_full(variable)
 
     assert ol_policy.ol_macro("listener", None, "io.ol.L,com.example.A") == "io.ol.L,com.example.A"
 
 
-def test_macro_listener_prefixes_comma_for_jinja_channel(variable: Callable[..., SimpleNamespace]) -> None:
+def test_macro_listener_prefixes_comma_for_jinja_channel(
+    variable: Callable[..., SimpleNamespace], jar_ok: list[tuple[str, str]]
+) -> None:
     """Канал None: значение дописывается с ведущей запятой."""
     _variable_full(variable)
 
@@ -1439,7 +1464,7 @@ def test_macro_listener_prefixes_comma_for_jinja_channel(variable: Callable[...,
 
 
 def test_macro_url_wins_over_dag_value(
-    variable: Callable[..., SimpleNamespace], caplog: pytest.LogCaptureFixture
+    variable: Callable[..., SimpleNamespace], jar_ok: list[tuple[str, str]], caplog: pytest.LogCaptureFixture
 ) -> None:
     """OL побеждает по url; DAG-значение попадает только в лог."""
     _variable_full(variable)
@@ -1450,7 +1475,9 @@ def test_macro_url_wins_over_dag_value(
     assert any("dag-marquez" in message and "marquez:5000" in message for message in messages)
 
 
-def test_macro_namespace_returns_variable_value(variable: Callable[..., SimpleNamespace]) -> None:
+def test_macro_namespace_returns_variable_value(
+    variable: Callable[..., SimpleNamespace], jar_ok: list[tuple[str, str]]
+) -> None:
     """namespace возвращается скаляром, без разделителей."""
     _variable_full(variable)
 
@@ -1516,6 +1543,70 @@ def test_macro_jar_absent_keeps_empty_dag_channel_empty(
     monkeypatch.setattr(ol_policy, "jar_available", lambda jar_uri, path: False)
 
     assert ol_policy.ol_macro("jar", None, "") == ""
+
+
+@pytest.mark.parametrize("field", ["listener", "url", "namespace", "jar"])
+def test_macro_refuses_every_field_when_jar_is_absent(
+    variable: Callable[..., SimpleNamespace], monkeypatch: pytest.MonkeyPatch, field: str
+) -> None:
+    """Инвариант 19: зонд не подтвердил jar — отказывают все четыре ветки, не только ``jar``.
+
+    Listener без своего класса на classpath роняет драйвер ``ClassNotFoundException``,
+    то есть отказ зонда обязан выключать лайнидж целиком, а не превращать «лайниджа
+    нет» в «джоба не стартует».
+    """
+    _variable_full(variable)
+    monkeypatch.setattr(ol_policy, "jar_available", lambda jar_uri, path: False)
+
+    assert ol_policy.ol_macro(field, None, "") == ""
+
+
+@pytest.mark.parametrize(
+    ("field", "dag_cur"),
+    [
+        ("listener", "com.example.A"),
+        ("url", "http://dag-marquez:5000"),
+        ("namespace", "dag-ns"),
+        ("jar", "a.jar"),
+    ],
+)
+def test_macro_jar_absent_keeps_dag_value_of_every_field(
+    variable: Callable[..., SimpleNamespace], monkeypatch: pytest.MonkeyPatch, field: str, dag_cur: str
+) -> None:
+    """Инвариант 18 при отказе зонда: собственное значение DAG'а переживает отказ во всех ветках."""
+    _variable_full(variable)
+    monkeypatch.setattr(ol_policy, "jar_available", lambda jar_uri, path: False)
+
+    assert ol_policy.ol_macro(field, None, dag_cur) == dag_cur
+
+
+def test_macro_jar_absent_names_the_reason_once_per_render(
+    variable: Callable[..., SimpleNamespace], monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Причину отказа зонда называет только ветка ``jar``: четыре ветки — один warning."""
+    _variable_full(variable)
+    monkeypatch.setattr(ol_policy, "jar_available", lambda jar_uri, path: False)
+
+    for field in ("jar", "listener", "url", "namespace"):
+        ol_policy.ol_macro(field, None, "")
+
+    assert [message for message in warnings_of(caplog) if "HDFS" in message] == [
+        "OpenLineage не включён: jar отсутствует или недоступен в HDFS "
+        "(hdfs://namenode:9000/o.jar). Залейте его: scripts/seed-openlineage-jar.bat"
+    ]
+
+
+def test_macro_jar_absent_warns_on_every_render(
+    variable: Callable[..., SimpleNamespace], monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """§6: причины отказа jar'а не дедуплицируются — иначе воркер молчит следующие 300 с."""
+    _variable_full(variable)
+    monkeypatch.setattr(ol_policy, "jar_available", lambda jar_uri, path: False)
+
+    ol_policy.ol_macro("jar", None, "")
+    ol_policy.ol_macro("jar", None, "")
+
+    assert len([message for message in warnings_of(caplog) if "HDFS" in message]) == 2
 
 
 def test_macro_jar_malformed_uri_keeps_dag_jars(
@@ -1912,7 +2003,9 @@ def _airflow_installed() -> bool:
 
 
 @pytest.mark.skipif(not _airflow_installed(), reason="нужен установленный Airflow")
-def test_template_renders_in_sandboxed_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_template_renders_in_sandboxed_environment(
+    monkeypatch: pytest.MonkeyPatch, jar_ok: list[tuple[str, str]]
+) -> None:
     """Инжектируемые шаблоны рендерятся окружением DAG'а без ошибок."""
     from airflow.models import DAG
 
@@ -1951,11 +2044,36 @@ def test_template_renders_in_sandboxed_environment(monkeypatch: pytest.MonkeyPat
 # ---------------------------------------------------------------------------
 
 
+# Литералы сидинга из airflow/scripts/start-airflow.sh: формат Variable и код
+# политики обязаны сходиться, иначе стенд после рестарта тихо остаётся без лайниджа.
+SEEDED_VARIABLE = json.dumps({
+    "enabled": True,
+    "spark_conf": {
+        "spark.extraListeners": "io.openlineage.spark.agent.OpenLineageSparkListener",
+        "spark.openlineage.transport.type": "http",
+        "spark.openlineage.transport.url": "http://marquez:5000",
+        "spark.openlineage.namespace": "hadoop-cluster",
+        "spark.openlineage.columnLineage.datasetLineageEnabled": "true",
+    },
+    "openlineage_jar": "hdfs://namenode:9000/opt/openlineage/openlineage-spark_2.13-1.46.0.jar",
+})
+
+
 def test_seeded_value_parses_back_to_dict() -> None:
     """Значение сидинга — сырая строка JSON: обратный разбор даёт объект."""
-    seeded = json.dumps({"enabled": True, "url": "http://marquez:5000", "namespace": "hadoop-cluster"})
+    assert isinstance(json.loads(SEEDED_VARIABLE), dict)
 
-    assert isinstance(json.loads(seeded), dict)
+
+def test_seeded_value_is_accepted_by_the_policy(variable: Callable[..., SimpleNamespace]) -> None:
+    """Регрессия §9: то, что сидит ``start-airflow.sh``, политика признаёт годным.
+
+    Ровно на этом рассогласовании (сидинг нового формата против кода старого)
+    стенд после рестарта попадал в ветку «конфиг негоден — лайниджа нет».
+    """
+    variable(raw=SEEDED_VARIABLE)
+
+    assert ol_policy._cfg() == json.loads(SEEDED_VARIABLE)
+    assert ol_policy._validate_cfg() is not None
 
 
 def test_double_encoded_value_is_not_an_object() -> None:
@@ -2004,8 +2122,23 @@ def test_merge_listeners_does_not_split_jinja(templated: str) -> None:
 
 
 def test_emit_without_dag_value_returns_value_as_is() -> None:
-    """Канал '': DAG молчал — возвращаем значение без разделителя."""
-    assert ol_policy._emit("io.ol.L", "", ol_policy.merge_listeners, "spark.extraListeners") == "io.ol.L"
+    """Канал '': DAG молчал — возвращаем значение без разделителя, не заходя в мердж.
+
+    Мердж передаётся падающий: ``merge("", value)`` вернул бы то же самое, и тест
+    прошёл бы, даже если бы пустой канал проваливался в общую ветку.
+    """
+
+    def _forbidden(dag_cur: object, value: object) -> str:
+        """Мердж, которого на пустом канале быть не должно.
+
+        :param dag_cur: DAG-значение канала.
+        :param value: наше значение.
+        :return: не возвращает.
+        :raises AssertionError: всегда.
+        """
+        raise AssertionError("на пустом канале мердж не вызывается")
+
+    assert ol_policy._emit("io.ol.L", "", _forbidden, "spark.extraListeners") == "io.ol.L"
 
 
 def test_emit_with_literal_merges_and_dedups() -> None:
@@ -2068,6 +2201,49 @@ def test_full_cycle_leaves_no_trailing_comma_when_lineage_is_off(
         "openlineage_jar": "hdfs://namenode:9000/o.jar",
     }))
     dag = airflow_dag.DAG(dag_id="render_off", schedule=None, start_date=None)
+    task = PublicLayoutOperator(dag=dag, jars="a.jar", conf={"spark.extraListeners": "com.example.A"})
+
+    ol_policy.inject_openlineage(task)
+    env = dag.get_template_env()
+
+    assert env.from_string(task.jars).render() == "a.jar"
+    assert env.from_string(task.conf["spark.extraListeners"]).render() == "com.example.A"
+
+
+def test_full_cycle_injects_nothing_when_jar_is_absent(
+    variable: Callable[..., SimpleNamespace], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Инвариант 19 сквозным прогоном: зонд отказал — в отрендеренной таске нет ни одного значения OL.
+
+    Ключи ``spark.openlineage.*``, которые парс кладёт литералами, в conf остаются,
+    но пустыми: без listener'а и без jar'а они безвредны. Проверяем именно то, что
+    роняло драйвер, — класс листенера и URI jar'а.
+    """
+    _variable_full(variable)
+    monkeypatch.setattr(ol_policy, "jar_available", lambda jar_uri, path: False)
+    dag = airflow_dag.DAG(dag_id="render_no_jar", schedule=None, start_date=None)
+    task = PublicLayoutOperator(dag=dag)
+
+    ol_policy.inject_openlineage(task)
+    env = dag.get_template_env()
+    rendered_conf = {key: env.from_string(value).render() for key, value in task.conf.items()}
+    rendered_jars = env.from_string(task.jars).render()
+
+    assert rendered_conf["spark.extraListeners"] == ""
+    assert rendered_conf["spark.openlineage.transport.url"] == ""
+    assert rendered_conf["spark.openlineage.namespace"] == ""
+    assert rendered_jars == ""
+    assert "io.ol.L" not in "".join(rendered_conf.values()) + rendered_jars
+    assert "hdfs://namenode:9000/o.jar" not in "".join(rendered_conf.values()) + rendered_jars
+
+
+def test_full_cycle_keeps_dag_values_when_jar_is_absent(
+    variable: Callable[..., SimpleNamespace], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Инвариант 18 сквозным прогоном: отказ зонда не стирает listener и jar'ы самого DAG'а."""
+    _variable_full(variable)
+    monkeypatch.setattr(ol_policy, "jar_available", lambda jar_uri, path: False)
+    dag = airflow_dag.DAG(dag_id="render_no_jar_dag_values", schedule=None, start_date=None)
     task = PublicLayoutOperator(dag=dag, jars="a.jar", conf={"spark.extraListeners": "com.example.A"})
 
     ol_policy.inject_openlineage(task)
