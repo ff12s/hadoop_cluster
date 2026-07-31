@@ -2121,41 +2121,42 @@ def test_merge_listeners_does_not_split_jinja(templated: str) -> None:
     assert ol_policy.merge_csv("", templated) == templated
 
 
-def test_emit_without_dag_value_returns_value_as_is() -> None:
+def test_emit_without_dag_value_returns_value_as_is(monkeypatch: pytest.MonkeyPatch) -> None:
     """Канал '': DAG молчал — возвращаем значение без разделителя, не заходя в мердж.
 
-    Мердж передаётся падающий: ``merge("", value)`` вернул бы то же самое, и тест
-    прошёл бы, даже если бы пустой канал проваливался в общую ветку.
+    ``utils.merge_csv`` подменён падающим: тест проходит только если пустой канал
+    не проваливается в общую ветку, где мердж действительно был бы вызван.
     """
 
-    def _forbidden(dag_cur: object, value: object) -> str:
+    def _forbidden(*sources: object) -> str:
         """Мердж, которого на пустом канале быть не должно.
 
-        :param dag_cur: DAG-значение канала.
-        :param value: наше значение.
+        :param sources: CSV-источники, как их принимает настоящий ``merge_csv``.
         :return: не возвращает.
         :raises AssertionError: всегда.
         """
         raise AssertionError("на пустом канале мердж не вызывается")
 
-    assert ol_policy.render._emit("io.ol.L", "", _forbidden, "spark.extraListeners") == "io.ol.L"
+    monkeypatch.setattr(ol_policy.utils, "merge_csv", _forbidden)
+
+    assert ol_policy.render._emit("io.ol.L", "", "spark.extraListeners") == "io.ol.L"
 
 
 def test_emit_with_literal_merges_and_dedups() -> None:
     """Канал-литерал: полный мердж с дедупом, DAG-значения первыми."""
-    merged = ol_policy.render._emit("io.ol.L", "com.example.A,io.ol.L", ol_policy.merge_csv, "spark.extraListeners")
+    merged = ol_policy.render._emit("io.ol.L", "com.example.A,io.ol.L", "spark.extraListeners")
 
     assert merged == "com.example.A,io.ol.L"
 
 
 def test_emit_with_none_channel_prefixes_comma() -> None:
     """Канал None: слева уже стоит текст DAG'а — дописываем через запятую."""
-    assert ol_policy.render._emit("io.ol.L", None, ol_policy.merge_csv, "spark.extraListeners") == ",io.ol.L"
+    assert ol_policy.render._emit("io.ol.L", None, "spark.extraListeners") == ",io.ol.L"
 
 
-def test_emit_uses_the_merge_it_was_given() -> None:
-    """Ветка jar использует свой мердж — сплит и дедуп по тем же правилам."""
-    merged = ol_policy.render._emit("hdfs://n:9000/o.jar", "a.jar", ol_policy.merge_csv, "spark.jars")
+def test_emit_jar_branch_splits_and_dedupes() -> None:
+    """Ветка jar мержит тем же ``merge_csv`` — сплит и дедуп по тем же правилам."""
+    merged = ol_policy.render._emit("hdfs://n:9000/o.jar", "a.jar", "spark.jars")
 
     assert merged == "a.jar,hdfs://n:9000/o.jar"
 

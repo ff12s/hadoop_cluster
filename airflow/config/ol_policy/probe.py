@@ -131,10 +131,9 @@ def jar_available(jar_uri: str, path: str) -> bool:
     """Лежит ли openlineage-spark jar в HDFS.
 
     Весь перебор, включая резолв эндпоинтов, уходит в демон-поток: таймаут
-    сокета не покрывает ``getaddrinfo``, а зависший вызов на парсе съедает бюджет
-    ``[core] dag_file_processor_timeout`` и убивает разбор DAG-файла целиком.
-    Результат брошенного потока отбрасывается — мемо пишет ожидающая сторона,
-    иначе две таски одного файла получили бы разные ответы.
+    сокета не покрывает ``getaddrinfo``, а зависший вызов стопорил бы рендер
+    таски на воркере. Результат брошенного потока отбрасывается — мемо пишет
+    ожидающая сторона, иначе две таски одного файла получили бы разные ответы.
 
     Мемо по ``jar_uri`` с TTL ``_MEMO_TTL_SEC``: поток тасок, который ходит за
     jar'ом с предсказуемым путём, не должен перегаживать кластер. Поток, доехавший
@@ -164,23 +163,25 @@ def jar_available(jar_uri: str, path: str) -> bool:
             _PROBE_DEADLINE_SEC,
             jar_uri,
         )
-    elif isinstance(slot[0], BaseException):
-        available = False
-        if isinstance(slot[0], handlers.NoEndpointsError):
-            warn_once(
-                ("no-endpoints",),
-                "OpenLineage не включён: эндпоинты WebHDFS не определены по HADOOP_CONF_DIR (%s)",
-                slot[0],
-            )
-        else:
-            warn_once(
-                ("probe-error",),
-                "OpenLineage не включён: не удалось определить эндпоинты WebHDFS (%s): %s",
-                jar_uri,
-                slot[0],
-            )
     else:
-        available = slot[0]
+        outcome = slot[0]
+        if isinstance(outcome, BaseException):
+            available = False
+            if isinstance(outcome, handlers.NoEndpointsError):
+                warn_once(
+                    ("no-endpoints",),
+                    "OpenLineage не включён: эндпоинты WebHDFS не определены по HADOOP_CONF_DIR (%s)",
+                    outcome,
+                )
+            else:
+                warn_once(
+                    ("probe-error",),
+                    "OpenLineage не включён: не удалось определить эндпоинты WebHDFS (%s): %s",
+                    jar_uri,
+                    outcome,
+                )
+        else:
+            available = outcome
 
     _jar_memo[jar_uri] = (available, _now())
     return available

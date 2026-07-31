@@ -6,13 +6,8 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 from . import probe, utils, variable
 from .logger import logger as log
-
-if TYPE_CHECKING:
-    from collections.abc import Callable
 
 
 def _refusal(dag_cur: str | None) -> str:
@@ -30,7 +25,7 @@ def _refusal(dag_cur: str | None) -> str:
     return dag_cur if isinstance(dag_cur, str) else ""
 
 
-def _emit(value: str, dag_cur: str | None, merge: Callable[..., str], key: str) -> str:
+def _emit(value: str, dag_cur: str | None, key: str) -> str:
     """Оформляет наше значение под тот канал, которым парс передал DAG-значение.
 
     Единственное место, где решается разделитель: пустой результат макроса не
@@ -39,7 +34,6 @@ def _emit(value: str, dag_cur: str | None, merge: Callable[..., str], key: str) 
     :param value: наше значение из Variable, уже прошедшее ``_clean``.
     :param dag_cur: канал, выбранный парсом: ``""`` — DAG молчал, строка —
         безопасный литерал DAG-значения, ``None`` — текст DAG'а стоит слева.
-    :param merge: ``utils.merge_csv``.
     :param key: имя ключа conf для лога.
     :return: строка для подстановки на месте вызова макроса.
     """
@@ -49,7 +43,7 @@ def _emit(value: str, dag_cur: str | None, merge: Callable[..., str], key: str) 
     if not dag_cur:
         log.info("ol_policy: %s подмешан: %s", key, value)
         return value
-    merged = merge(dag_cur, value)
+    merged = utils.merge_csv(dag_cur, value)
     log.info("ol_policy: %s мердж: %s", key, merged)
     return merged
 
@@ -104,8 +98,7 @@ def _jar_ok(config: variable.Config, *, warn: bool = False) -> bool:
 def _resolve_jar(config: variable.Config, dag_cur: str | None) -> str:
     """Оформляет URI подтверждённого jar'а под канал DAG-значения.
 
-    Ветка ``jar`` — единственная, которая называет причину отказа зонда: остальные
-    три гейтятся тем же ``_jar_ok`` молча, чтобы один отказ не звучал четырежды.
+    Почему причину отказа зонда называет только эта ветка — см. ``:param warn:`` у ``_jar_ok``.
 
     :param config: проверенный конфиг из ``variable._validate_cfg``.
     :param dag_cur: канал DAG-значения jar'ов, выбранный парсом.
@@ -114,7 +107,7 @@ def _resolve_jar(config: variable.Config, dag_cur: str | None) -> str:
     """
     if not _jar_ok(config, warn=True):
         return _refusal(dag_cur)
-    return _emit(config.jar_uri, dag_cur, utils.merge_csv, "spark.jars")
+    return _emit(config.jar_uri, dag_cur, "spark.jars")
 
 
 def ol_macro(field: str, forced: bool | None = None, dag_cur: str | None = "") -> str:
@@ -152,7 +145,7 @@ def ol_macro(field: str, forced: bool | None = None, dag_cur: str | None = "") -
     if not _jar_ok(config):
         return _refusal(dag_cur)
     if field == "listener":
-        return _emit(config.listener, dag_cur, utils.merge_csv, "spark.extraListeners")
+        return _emit(config.listener, dag_cur, "spark.extraListeners")
     if field == "url":
         return _scalar(config.url, dag_cur, "spark.openlineage.transport.url")
     return _scalar(config.namespace, dag_cur, "spark.openlineage.namespace")

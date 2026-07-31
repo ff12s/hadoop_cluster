@@ -101,9 +101,8 @@ def _validate_cfg() -> Config | None:
     cfg = _cfg()
     if cfg is None:
         return None
-    # Ключи JSON-объекта статически не строки: отсюда ``dict[object, object]`` и копия.
     spark_conf_obj: object = cfg.get("spark_conf", {})
-    spark_conf: dict[object, object] = {**spark_conf_obj} if isinstance(spark_conf_obj, dict) else {}
+    spark_conf: dict[str, object] = spark_conf_obj if isinstance(spark_conf_obj, dict) else {}
     config = Config(
         listener=_clean(spark_conf.get("spark.extraListeners")),
         url=_clean(spark_conf.get("spark.openlineage.transport.url"), require_scheme=True),

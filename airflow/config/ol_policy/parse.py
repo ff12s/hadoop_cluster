@@ -65,8 +65,7 @@ def inject_openlineage(task: object) -> None:
     :param task: экземпляр ``SparkSubmitOperator``; мутируется на месте.
     :return: None.
     """
-    # Импорт внутри функции: граф импортов парс-модуля не тянет цепочку
-    # render → variable, probe, и разделение фаз видно в коде, а не только в docstring'ах.
+    # Импорт внутри функции отмечает границу фазы: резолв значений уходит в render.
     from . import render
     macro = render.ol_macro
 
