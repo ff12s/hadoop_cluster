@@ -4,13 +4,14 @@ OL-листенер вынесен из общего ``spark-defaults.conf`` (о
 ``spark-shell``), поэтому Airflow навешивает лайнидж своим ``SparkSubmitOperator``
 сам — без правок в DAG'ах.
 
-Что где решается. На **парсе** DAG-файла решается только то, для чего не нужен
-метастор: подходит ли таска, не выключил ли лайнидж сам DAG (``params``) и лежит
-ли openlineage-spark jar в HDFS. Адрес и namespace живут в Airflow Variable
-``openlineage_config`` и читаются на **рендере** шаблонов — через макрос
-``__openlineage_v1``, который политика кладёт в ``dag.user_defined_macros``.
-Так парс не ходит в БД, а правка Variable в UI действует со следующего запуска
-таски.
+Что где решается. На **парсе** DAG-файла решается только то, для чего не нужны
+Variable, метастор и сеть: подходит ли таска, не выключил ли лайнидж сам DAG
+(``params``), и в conf/атрибут ``jars`` кладутся строки с вызовом макроса
+``__openlineage_v1``. Сам макрос политика кладёт в ``dag.user_defined_macros``.
+Значения — адрес, namespace, класс listener'а и jar — читаются на **рендере**
+шаблонов, когда Jinja вызывает макрос на воркере: там же jar проверяется в HDFS.
+Так парс не ходит ни в БД, ни в сеть, а правка Variable в UI действует со
+следующего запуска таски.
 
 Политика ничего не роняет: любая ошибка гасится и превращается в «лайниджа нет».
 Модуль намеренно не импортирует Airflow на уровне модуля — импорт идёт внутри
@@ -22,7 +23,6 @@ from __future__ import annotations
 import functools
 import importlib
 import json
-import os
 import threading
 from types import SimpleNamespace
 from typing import Callable, Tuple, Type
@@ -438,39 +438,6 @@ def ol_macro(field: str, forced: bool | None = None, dag_cur: str | None = "") -
     return ""
 
 
-def ol_conf_template(forced_on: bool) -> dict[str, str]:
-    """Значения conf: три из пяти — вызовы одного макроса, решение целиком в Python.
-
-    :param forced_on: True, если DAG форсировал включение. Форс-выключение до
-        этой функции не доходит — его отсекает гейт в ``inject_openlineage``.
-    :return: словарь conf-ключей, где три значения — Jinja-вызовы макроса.
-    """
-    forced = "true" if forced_on else "none"
-    return {
-        "spark.extraListeners": f"{{{{ {MACRO}('listener', {forced}) }}}}",
-        "spark.openlineage.transport.type": "http",
-        "spark.openlineage.transport.url": f"{{{{ {MACRO}('url', {forced}) }}}}",
-        "spark.openlineage.namespace": f"{{{{ {MACRO}('namespace', {forced}) }}}}",
-        "spark.openlineage.columnLineage.datasetLineageEnabled": "true",
-    }
-
-
-_OUR_LISTENERS = frozenset(ol_conf_template(forced)["spark.extraListeners"] for forced in (True, False))
-
-
-def foreign_listener(cur_conf: dict[str, object]) -> bool:
-    """Задан ли в conf таски не наш ``spark.extraListeners``.
-
-    Чужим считается значение, а не наличие ключа: иначе повторный прогон
-    политики по той же таске принял бы собственный шаблон за чужой листенер.
-
-    :param cur_conf: conf таски, каким он был до политики.
-    :return: True, если ключ задан непустым значением и это не шаблон политики.
-    """
-    value = cur_conf.get("spark.extraListeners")
-    return bool(value) and value not in _OUR_LISTENERS
-
-
 # ---------------------------------------------------------------------------
 # Зонд jar в HDFS
 # ---------------------------------------------------------------------------
@@ -652,12 +619,12 @@ def _macro_call(field: str, forced: str, dag_cur: str | None) -> str:
 
 
 def inject_openlineage(task: object) -> None:
-    """Навешивает OpenLineage на уже проверенную Spark-таску.
+    """Навешивает OpenLineage на проверенную Spark-таску: макрос и строки в conf.
 
-    Порядок гейтов нормативен: форс-выключение проверяется раньше conf, поэтому
-    DAG, который и выключил тумблер, и сам задал листенер, уходит тихо. Порядок
-    трёх мутаций тоже: обрыв оставляет таску максимум с лишним jar'ом на
-    classpath, но без листенера — то есть без лайниджа, что безопасно.
+    Порядок гейтов нормативен: форс-выключение проверяется раньше всего, поэтому
+    выключивший лайнидж DAG уходит нетронутым. Значения лайниджа сюда не попадают —
+    на парсе собираются только строки с вызовами макроса, а Variable и HDFS
+    читаются на рендере.
 
     :param task: экземпляр ``SparkSubmitOperator``; мутируется на месте.
     :return: None.
@@ -673,43 +640,51 @@ def inject_openlineage(task: object) -> None:
     if forced is False:
         return
 
-    cur_conf = dict(getattr(task, attrs.conf) or {})
-
-
     dag = utils.task_dag(task)
     if dag is None:
         logger.warn_once(("no-dag", dag_id, task_id), "OpenLineage не включён: таска не привязана к DAG, макрос положить некуда (%s)", task_id)
         return
 
     # Макрос кладётся в DAG политикой намеренно: это единственный способ отложить
-    # чтение Variable до рендера таски, ничего не требуя от автора DAG'а.
-    # Копия: DAG не трогаем до конца вычислений. Чужим считается только объект,
-    # который не является нашей функцией, — иначе вторая таска файла увидела бы
-    # чужим то, что положила первая.
+    # чтение Variable до рендера таски, ничего не требуя от автора DAG'а. Чужим
+    # считается только объект, который не является нашей функцией, — иначе вторая
+    # таска файла увидела бы чужим то, что положила первая.
     macros = dict(getattr(dag, "user_defined_macros", None) or {})
     if MACRO in macros and macros[MACRO] is not ol_macro:
         logger.warn_once(("macro-taken", dag_id, task_id), "OpenLineage не включён: имя макроса %s занято чужим объектом (%s.%s)", MACRO, dag_id, task_id)
         return
 
-    jar_uri = os.environ.get("OPENLINEAGE_JAR", "")
-    path = jar_path(jar_uri)
-    if path is None:
-        if not jar_uri.strip():
-            logger.warn_once(("jar-unset",), "OpenLineage не включён: OPENLINEAGE_JAR не задан")
-        else:
-            logger.warn_once(("jar-malformed",), "OpenLineage не включён: OPENLINEAGE_JAR задан без схемы или без пути (%s)", jar_uri)
-        return
-    if not jar_available(jar_uri, path):
-        logger.warn_once(("jar-absent", dag_id, task_id),"OpenLineage не включён: jar отсутствует или недоступен в HDFS (%s), таска %s.%s. Залейте его: scripts/seed-openlineage-jar.bat", jar_uri, dag_id, task_id)
-        return
+    forced_literal = "true" if forced is True else "none"
+    cur_conf = dict(getattr(task, attrs.conf) or {})
 
-    merged_conf = {**ol_conf_template(forced is True), **cur_conf}
-    merged_jars = utils.merge_jars(getattr(task, attrs.jars), cur_conf.get("spark.jars"), jar_uri)
+    listener_prefix, listener_cur = _dag_channel(cur_conf.get("spark.extraListeners"))
+    # Оба канала jar'ов известны здесь и склеиваются до макроса: на рендере
+    # прочитать их будет нечем.
+    jars_prefix, jars_cur = _dag_channel(utils.merge_jars(getattr(task, attrs.jars), cur_conf.get("spark.jars"), ""))
+    # Для скаляров префикс отбрасывается: OL побеждает целиком, дописывать текст
+    # DAG'а слева значило бы нарушить это правило.
+    _, url_cur = _dag_channel(cur_conf.get("spark.openlineage.transport.url"))
+    _, namespace_cur = _dag_channel(cur_conf.get("spark.openlineage.namespace"))
+
+    if listener_cur is None or jars_cur is None:
+        logger.warn_once(
+            ("jinja-channel", dag_id, task_id),
+            "OpenLineage: DAG-значение содержит Jinja — дедуп значения OL невозможен (%s.%s)",
+            dag_id,
+            task_id,
+        )
 
     macros[MACRO] = ol_macro
     dag.user_defined_macros = macros
-    setattr(task, attrs.jars, merged_jars)
-    setattr(task, attrs.conf, merged_conf)
+    setattr(task, attrs.jars, jars_prefix + _macro_call("jar", forced_literal, jars_cur))
+    setattr(task, attrs.conf, {
+        **cur_conf,
+        "spark.extraListeners": listener_prefix + _macro_call("listener", forced_literal, listener_cur),
+        "spark.openlineage.transport.type": "http",
+        "spark.openlineage.transport.url": _macro_call("url", forced_literal, url_cur),
+        "spark.openlineage.namespace": _macro_call("namespace", forced_literal, namespace_cur),
+        "spark.openlineage.columnLineage.datasetLineageEnabled": "true",
+    })
 
 
 def apply_policy(task: object) -> None:
