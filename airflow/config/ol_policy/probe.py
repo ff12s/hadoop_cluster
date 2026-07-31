@@ -28,7 +28,9 @@ _ProbeOutcome = Literal["found", "absent", "down"]
 
 # Ограничители зонда: дедлайн на весь перебор, таймаут одного эндпоинта, TTL мемо.
 # Модульные, потому что тесты подменяют их monkeypatch'ем.
-_PROBE_DEADLINE_SEC = 5.0
+# Дедлайн покрывает два прохода по HA-паре NameNode: 2 прохода × 2 эндпоинта ×
+# ENDPOINT_TIMEOUT_SEC + пауза ретрая (2*2*2.0 + 0.5 = 8.5 с), с запасом.
+_PROBE_DEADLINE_SEC = 10.0
 ENDPOINT_TIMEOUT_SEC = 2.0
 _MEMO_TTL_SEC = 300.0
 _MEMO_ERROR_TTL_SEC = 30.0

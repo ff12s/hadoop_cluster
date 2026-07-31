@@ -967,6 +967,35 @@ def test_probe_retries_endpoints_once_on_transient_errors(
     assert pauses == [ol_policy.probe._RETRY_PAUSE_SEC]
 
 
+def test_probe_deadline_covers_two_passes_over_ha_pair(
+    endpoints: Callable[[list[str]], None],
+    requests_log: Callable[[Callable[[object], object]], list[object]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """HA-пара NameNode: оба отказывают на первом проходе, второй эндпоинт находит jar на втором.
+
+    Дедлайн зонда обязан пережить худший случай — 2 прохода x 2 эндпоинта, иначе
+    ретрай, добавленный ради HA-кластера, не успевает сработать именно там, где нужен.
+    """
+    endpoints(["http://nn1:9870", "http://nn2:9870"])
+    pauses: list[float] = []
+    monkeypatch.setattr(ol_policy.probe, "_sleep", pauses.append)
+    attempts: list[object] = []
+
+    def _handler(url: object) -> object:
+        attempts.append(url)
+        if len(attempts) <= 2:
+            return OSError("connection refused")
+        if len(attempts) == 3:
+            return OSError("connection refused")
+        return FakeResponse(200)
+
+    requests_log(_handler)
+    assert ol_policy.probe._probe("/jars/ol.jar") == "found"
+    assert len(attempts) == 4
+    assert pauses == [ol_policy.probe._RETRY_PAUSE_SEC]
+
+
 def test_probe_absent_is_terminal_on_first_pass(
     endpoints: Callable[[list[str]], None],
     requests_log: Callable[[Callable[[object], object]], list[object]],
