@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import base64
 import importlib
 import io
 import json
@@ -19,6 +20,7 @@ import types
 from types import SimpleNamespace
 from typing import Callable
 from urllib.error import HTTPError, URLError
+from urllib.request import Request
 
 import pytest
 
@@ -113,6 +115,29 @@ def standby_error(url: str) -> HTTPError:
     return HTTPError(url, 403, "Forbidden", {}, io.BytesIO(body))
 
 
+def _http_error(code: int, body: bytes = b"") -> HTTPError:
+    """Строит HTTPError с телом для подмены urlopen.
+
+    :param code: HTTP-код ответа.
+    :param body: тело ответа.
+    :return: экземпляр HTTPError.
+    """
+    return HTTPError("url", code, "msg", None, io.BytesIO(body))
+
+
+def _fake_spnego(monkeypatch: pytest.MonkeyPatch, token: bytes = b"tok") -> None:
+    """Подставляет дубль модуля spnego, отдающий заданный токен.
+
+    :param monkeypatch: фикстура подмены.
+    :param token: байты токена, которые вернёт step().
+    :return: None.
+    """
+    ctx = SimpleNamespace(step=lambda in_token=None: token)
+    module = types.ModuleType("spnego")
+    module.client = lambda hostname, service, protocol: ctx
+    monkeypatch.setitem(sys.modules, "spnego", module)
+
+
 @pytest.fixture
 def jar_env(monkeypatch: pytest.MonkeyPatch) -> str:
     """Задаёт ``OPENLINEAGE_JAR`` штатным значением стенда.
@@ -171,16 +196,16 @@ def endpoints(monkeypatch: pytest.MonkeyPatch) -> Callable[[list[str]], None]:
 
 
 @pytest.fixture
-def requests_log(monkeypatch: pytest.MonkeyPatch) -> Callable[[Callable[[str], object]], list[str]]:
+def requests_log(monkeypatch: pytest.MonkeyPatch) -> Callable[[Callable[[object], object]], list[object]]:
     """Подменяет ``urlopen`` заданным обработчиком и пишет запрошенные URL.
 
     :param monkeypatch: фикстура подмены.
     :return: функция-настройщик, возвращающая список запрошенных URL.
     """
-    urls: list[str] = []
+    urls: list[object] = []
 
-    def _install(handler: Callable[[str], object]) -> list[str]:
-        def _urlopen(url: str, timeout: float | None = None) -> object:
+    def _install(handler: Callable[[object], object]) -> list[object]:
+        def _urlopen(url: object, timeout: float | None = None) -> object:
             urls.append(url)
             result = handler(url)
             if isinstance(result, BaseException):
@@ -868,6 +893,55 @@ def test_probe_warns_when_resolver_raises(
 
     assert ol_policy.jar_available(JAR, "/opt/ol.jar") is False
     assert any("не удалось определить эндпоинты" in message for message in warnings_of(caplog))
+
+
+def test_probe_401_retries_with_negotiate_header(
+    monkeypatch: pytest.MonkeyPatch,
+    endpoints: Callable[[list[str]], None],
+    requests_log: Callable[[Callable[[object], object]], list[object]],
+) -> None:
+    """401 без auth → повтор того же URL с заголовком Authorization: Negotiate."""
+    endpoints(["http://nn1:9870"])
+    _fake_spnego(monkeypatch, b"tok")
+
+    def _handler(url: object) -> object:
+        if isinstance(url, Request):
+            assert url.get_header("Authorization") == "Negotiate " + base64.b64encode(b"tok").decode("ascii")
+            return SimpleNamespace(status=200, __enter__=lambda s: s, __exit__=lambda s, *a: False)
+        return _http_error(401)
+
+    urls = requests_log(_handler)
+    assert ol_policy.probe._query_endpoint("http://nn1:9870", "/jars/ol.jar") == "found"
+    assert len(urls) == 2
+
+
+def test_probe_401_without_spnego_is_error_with_warning(
+    monkeypatch: pytest.MonkeyPatch,
+    endpoints: Callable[[list[str]], None],
+    requests_log: Callable[[Callable[[object], object]], list[object]],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """SPNEGO недоступен (нет модуля) → исход error и warning про Kerberos."""
+    monkeypatch.setitem(sys.modules, "spnego", None)
+    requests_log(lambda url: _http_error(401))
+    assert ol_policy.probe._query_endpoint("http://nn1:9870", "/jars/ol.jar") == "error"
+    assert any("Kerberos" in message for message in warnings_of(caplog))
+
+
+def test_probe_401_then_404_is_absent(
+    monkeypatch: pytest.MonkeyPatch,
+    requests_log: Callable[[Callable[[object], object]], list[object]],
+) -> None:
+    """Авторизованный повтор получил 404 → jar'а нет (absent, без warning'а)."""
+    _fake_spnego(monkeypatch)
+
+    def _handler(url: object) -> object:
+        if isinstance(url, Request):
+            return _http_error(404)
+        return _http_error(401)
+
+    requests_log(_handler)
+    assert ol_policy.probe._query_endpoint("http://nn1:9870", "/jars/ol.jar") == "absent"
 
 
 def test_probe_memoizes_by_jar_uri(

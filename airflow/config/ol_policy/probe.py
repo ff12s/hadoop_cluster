@@ -2,16 +2,19 @@
 
 Единственное место пакета, которое ходит в сеть, и вызывается оно только на рендере
 (почему не на парсе — см. ``parse``).
+
+Аутентификация — только SPNEGO/Negotiate по challenge 401; делегационные токены не поддерживаются.
 """
 
 from __future__ import annotations
 
+import base64
 import json
 import threading
 from typing import Literal
 from urllib.error import HTTPError
 from urllib.parse import quote, urlparse
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 from . import hadoop_conf, handlers, utils
 from .logger import warn_once
@@ -64,6 +67,53 @@ def _is_standby(error: HTTPError) -> bool:
     return isinstance(remote, dict) and remote.get("exception") == "StandbyException"
 
 
+def _spnego_header(endpoint: str) -> str | None:
+    """SPNEGO-заголовок Authorization для эндпоинта либо None.
+
+    Ленивый импорт pyspnego: пакет и его kerberos-бэкенд есть не во всех средах,
+    а тесты бегут вовсе без него. Любая ошибка (нет модуля, нет тикета, KDC
+    недоступен) — это «токена нет», решает вызывающий.
+
+    :param endpoint: адрес вида ``http://host:port``.
+    :return: строка ``Negotiate <base64>`` либо None.
+    """
+    host = urlparse(endpoint).hostname
+    if not host:
+        return None
+    try:
+        import spnego
+
+        token = spnego.client(hostname=host, service="HTTP", protocol="kerberos").step()
+    except Exception:
+        return None
+    if not token:
+        return None
+    return "Negotiate " + base64.b64encode(token).decode("ascii")
+
+
+def _query_with_auth(endpoint: str, url: str) -> _Outcome:
+    """Повторяет запрос зонда с SPNEGO-заголовком после challenge 401.
+
+    :param endpoint: адрес эндпоинта — источник hostname для токена.
+    :param url: полный URL первоначального запроса.
+    :return: "found", "absent" либо "error".
+    """
+    header = _spnego_header(endpoint)
+    if header is None:
+        warn_once(
+            ("kerberos-unavailable",),
+            "OpenLineage не включён: WebHDFS требует Kerberos (401), SPNEGO-токен получить не удалось",
+        )
+        return "error"
+    try:
+        with urlopen(Request(url, headers={"Authorization": header}), timeout=ENDPOINT_TIMEOUT_SEC) as response:  # noqa: S310
+            return "found" if response.status == 200 else "error"
+    except HTTPError as error:
+        return "absent" if error.code == 404 else "error"
+    except Exception:
+        return "error"
+
+
 def _query_endpoint(endpoint: str, path: str) -> _Outcome:
     """Спрашивает один эндпоинт WebHDFS про файл.
 
@@ -80,6 +130,8 @@ def _query_endpoint(endpoint: str, path: str) -> _Outcome:
             return "absent"
         if error.code == 403 and _is_standby(error):
             return "standby"
+        if error.code == 401:
+            return _query_with_auth(endpoint, url)
         return "error"
     except Exception:
         return "error"
