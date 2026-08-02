@@ -13,6 +13,7 @@
 - **`test-hdfs.bat`** — только компоненты HDFS
 - **`test-yarn.bat`** — только компоненты YARN
 - **`test-airflow.bat`** — только оркестрация Airflow
+- **`test-policy.bat`** — юнит-тесты cluster policy OpenLineage внутри контейнера Airflow (быстрые, кластер не нужен)
 
 ## 🎯 Использование
 
@@ -24,8 +25,9 @@
 ### Пошаговая проверка
 1. `test-hdfs.bat` — операции HDFS
 2. `test-yarn.bat` — YARN и MapReduce
-3. `test-airflow.bat` — DAG'и Airflow на YARN (прогоняет оба DAG'а, занимает несколько минут)
-4. `test-cluster.bat` — комплексная проверка
+3. `test-policy.bat` — cluster policy OpenLineage (секунды, без прогона DAG'ов)
+4. `test-airflow.bat` — DAG'и Airflow на YARN (прогоняет оба DAG'а, занимает несколько минут)
+5. `test-cluster.bat` — комплексная проверка
 
 ### Остановка
 - `docker compose down` — остановка; для очистки данных `docker compose down --volumes`
@@ -68,6 +70,19 @@
 - ✅ Приложение YARN именно этого прогона (id разбирается из лога таски) дошло до SUCCEEDED
 - ✅ raw.parquet и agg.parquet записаны в HDFS
 - ✅ Лайнидж доехал до Marquez, и `agg.parquet` обновлён этим прогоном (а не остался от предыдущего)
+- ✅ Cluster policy: в фактически собранной команде `spark-submit` присутствует вызов макроса `__openlineage_v1`, и оба jar'а DAG'а (`mine.jar`, `other.jar`) сохранились в ней; `conf['spark.jars']` при этом не переписан
+- ✅ Тумблер `params={"openlineage": False}` убирает листенер из команды
+- ✅ Правка Variable `openlineage_config` подхватывается без рестарта, со следующего запуска таски (значение восстанавливается после проверки)
+
+Мердж `spark.extraListeners` DAG'а с OL-listener'ом из Variable этот бат-скрипт не проверяет — команда
+строится напрямую через `_build_spark_submit_command`, без рендера Jinja и без DAG-listener'а на
+входе. Сам мердж (дедуп, порядок, побеждающий Variable) покрыт юнит-тестами
+`airflow/config/tests/test_ol_policy.py` (запускаются `test-policy.bat`).
+
+### Тесты cluster policy (`test-policy.bat`):
+- ✅ Health контейнера `hadoop-airflow`
+- ✅ Полный pytest-набор `/opt/airflow/config/tests` внутри контейнера: таблица истинности тумблера, обе раскладки атрибутов оператора (4.1.1 и 4.10.0), зонд jar с дедлайном, разбор конфигов кластера, инварианты политики
+- ✅ Variable `openlineage_config` хранится как JSON-объект (регрессия на двойное кодирование через `variables set --json`)
 
 ### Общие тесты:
 - ✅ Сетевая связность между контейнерами

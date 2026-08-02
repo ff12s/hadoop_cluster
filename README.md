@@ -170,6 +170,7 @@ hadoop_cluster/
 ├── airflow/                 # Airflow (webserver + scheduler)
 │   ├── dags/                # spark_pi_dag, spark_etl_dag
 │   ├── jobs/                # PySpark-джобы для DAG'ов
+│   ├── config/              # cluster policy: airflow_local_settings.py (точка входа) + пакет ol_policy/, tests/
 │   ├── scripts/             # start-airflow.sh, ensure_db.py
 │   ├── logs/                # Логи задач (монтируются, не коммитятся)
 │   ├── .dockerignore
@@ -216,7 +217,146 @@ copy env_example .env
 | Переменная | Значение | Описание |
 |------------|----------|----------|
 | `OPENLINEAGE_VERSION` | `1.46.0` | Версия OpenLineage |
-| `OPENLINEAGE_NAMESPACE` | `hadoop-cluster` | Пространство имён |
+| `OPENLINEAGE_CONFIG_RESEED` | `false` | `true` — при следующем старте контейнера перезаписать Variable `openlineage_config` дефолтным JSON (см. ниже). Сидинг иначе идемпотентный: существующую Variable не трогает, иначе правка через UI не пережила бы перезапуск |
+
+Переменных `OPENLINEAGE_NAMESPACE`, `OPENLINEAGE_URL` и `OPENLINEAGE_JAR` в `.env` больше нет: адрес
+Marquez, namespace, jar openlineage-spark и общий выключатель лайниджа целиком переехали в Airflow
+Variable `openlineage_config` (формат — ниже) и правятся в UI (**Admin → Variables**) — правка
+действует со **следующего запуска таски**, без рестарта и пересборки контейнера.
+
+OL-листенер **не** включён глобально в общий `spark-defaults.conf` — иначе он навешивался бы и на
+интерактивный `spark-shell` и ломал его. Вместо этого OL инжектится **точечно, на стороне каждого
+рантайма**, который должен писать лайнидж:
+- **Airflow** — cluster policy `task_policy` (`airflow/config/airflow_local_settings.py`, точка
+  входа, которую Airflow ищет по имени файла) без собственной логики делегирует всё пакету
+  `airflow/config/ol_policy/`; тот на парсе DAG-файла навешивает `on_execute_callback` на каждый
+  `SparkSubmitOperator`, а на воркере (до `execute()`) колбэк читает Variable, зондирует HDFS и
+  пишет OL-конфиг в атрибут `conf` таски (без правок в DAG'ах). Джобы идут в `deploy-mode=cluster`,
+  `spark.yarn.jars` не задан → spark-submit заливает клиентский `$SPARK_HOME/jars` как classpath
+  драйвера. Поэтому openlineage-spark jar **удалён из airflow-образа** (`airflow/Dockerfile`) и
+  берётся **из HDFS**: колбэк дописывает jar-URI из поля `openlineage_jar` Variable в атрибут `jars`
+  оператора (тот уезжает в `--jars`), а строковый ключ `conf["spark.jars"]`, если DAG его задал,
+  забирается в тот же мердж и **удаляется из итогового conf** — иначе jar-список был бы объявлен
+  дважды и полагался бы на приоритет `--jars` у spark-submit. Jar заливается в HDFS
+  скриптом `scripts/seed-openlineage-jar.bat` (вызывается из `start-cluster.bat` автоматически).
+  Наличие jar проверяется зондом WebHDFS по эндпоинтам из `HADOOP_CONF_DIR` **на воркере**, после
+  рендера (не на парсе DAG-файла): нет jar — лайнидж не включается, чтобы джоба не упала с
+  `ClassNotFoundException`;
+- **Jupyter** — `PYSPARK_SUBMIT_ARGS` в `jupyter/scripts/start-jupyter.sh` (свой независимый конфиг
+  только для Spark-сессий ноутбуков, `OPENLINEAGE_URL`/`OPENLINEAGE_NAMESPACE` этого файла эту
+  Variable не используют и не читают);
+- **Kyuubi** — `spark.*`-ключи в `kyuubi/config/kyuubi-defaults.conf` (пробрасываются в порождаемый engine).
+
+Поэтому `spark-shell` и «голая» нода `hadoop`/history листенер не грузят.
+
+#### Конфиг лайниджа Airflow: Variable `openlineage_config`
+
+Адрес Marquez, namespace, jar и общий выключатель лайниджа живут в Airflow Variable
+`openlineage_config`, а не в окружении. Правится в UI (**Admin → Variables**), подхватывается
+**со следующего запуска таски**, без рестарта и пересборки. Значение — JSON-объект с тремя ключами:
+`enabled` (bool), `spark_conf` (object) и `openlineage_jar` (строка, HDFS-URI со схемой). Пример —
+ровно то, чем контейнер сидирует Variable при первом старте (`airflow/scripts/start-airflow.sh`):
+
+```json
+{
+    "enabled": true,
+    "spark_conf": {
+        "spark.extraListeners": "io.openlineage.spark.agent.OpenLineageSparkListener",
+        "spark.openlineage.transport.type": "http",
+        "spark.openlineage.transport.url": "http://marquez:5000",
+        "spark.openlineage.namespace": "hadoop-cluster",
+        "spark.openlineage.columnLineage.datasetLineageEnabled": "true"
+    },
+    "openlineage_jar": "hdfs://namenode:9000/opt/openlineage/openlineage-spark_2.13-1.46.0.jar"
+}
+```
+
+- Из `spark_conf` политика читает ровно **три** ключа: `spark.extraListeners`,
+  `spark.openlineage.transport.url` и `spark.openlineage.namespace`. Остальные ключи объекта
+  (`spark.openlineage.transport.type`, `spark.openlineage.columnLineage.datasetLineageEnabled`) она
+  не читает вовсе — те же два значения (`transport.type=http`,
+  `columnLineage.datasetLineageEnabled=true`) политика прописывает в conf таски сама; держать их в
+  `spark_conf` можно для полноты картины, на инъекцию это не влияет. Никакие другие ключи `spark_conf`
+  в conf таски не попадают.
+- Полное имя класса listener'а (`io.openlineage.spark.agent.OpenLineageSparkListener`) нигде не
+  зашито в код политики — оно живёт только в значении Variable (пример выше — из
+  `start-airflow.sh`) и в этом README.
+- Переменная сидится при первом старте контейнера значением, показанным выше. Дальше правка `.env`
+  на неё не влияет: источник конфигурации — Variable. Перезасеять дефолтами:
+  `OPENLINEAGE_CONFIG_RESEED=true` в `.env` + перезапуск.
+- Лайнидж включается, только если `enabled: true` **и** все три поля `spark_conf` из списка выше
+  заполнены **и** `openlineage_jar` — непустой URI со схемой, файл которого фактически лежит в HDFS
+  (зонд WebHDFS на воркере, в колбэке). Неполный или битый конфиг = «лайниджа нет» плюс предупреждение
+  в логе таски; молча выключается ровно один случай — честный `enabled: false` (или форс-выключение из
+  DAG'а, см. ниже).
+- Ключ `auth` в Variable **не поддерживается**: любое значение из conf уезжает в командную строку
+  `spark-submit` и видно в `ps` и в YARN.
+
+#### Мердж DAG-conf и Variable
+
+Таска сама вправе задать `spark.extraListeners`, `jars`/`conf["spark.jars"]`,
+`spark.openlineage.transport.url` и `spark.openlineage.namespace` — политика не затирает их молча:
+
+- **`spark.extraListeners`** — **мердж**: сначала листенеры, которые перечислил DAG, затем
+  OL-listener из Variable; дубликаты убираются, порядок сохраняется.
+- **jar'ы** — тоже **мердж**: атрибут `jars` и строковый `conf["spark.jars"]` таски складываются с
+  `openlineage_jar` из Variable в одну CSV-строку без дублей; итог пишется **в атрибут `jars`
+  оператора** (`--jars` при сабмите), а сам ключ `spark.jars` из итогового conf **удаляется** —
+  его элементы уже уехали в `--jars`, двойное объявление полагалось бы на приоритет `--jars`.
+- **`spark.openlineage.transport.url`** и **`spark.openlineage.namespace`** — здесь **побеждает
+  OpenLineage**: значение из Variable подставляется целиком, DAG-значение того же ключа в результат
+  не входит (только упоминается в логе как перебитое).
+- Отказ от лайниджа (форс-выключение, `enabled: false`, неполный конфиг Variable или отсутствующий
+  в HDFS jar) не стирает то, что DAG сам положил в `jars`/`conf` — политика возвращает собственное
+  значение DAG'а, а не пустую строку.
+- Технически это двухфазный процесс. На **парсе** DAG-файла политика видит исходные DAG-значения и
+  идемпотентно дописывает колбэк в `on_execute_callback` таски; Variable и HDFS на парсе не читаются
+  (иначе сеть и метастор в этой точке жгли бы бюджет `[core] dag_file_processor_timeout` шедулера на
+  каждый цикл разбора DAG-bag'а). На **воркере**, когда Airflow запускает колбэк перед `execute()`,
+  значения (адрес, namespace, jar) читаются из Variable, зондируется HDFS, и результаты пишутся в
+  атрибут `conf` таски. Рендер Jinja происходит до колбэка, поэтому переменные таски уже отрендерены.
+
+#### Тумблер лайниджа в DAG'е
+
+Ключ `openlineage` в `params` форсирует решение поверх Variable — на уровне таски или всего DAG'а:
+
+```python
+with DAG(dag_id="spark_etl_dag", params={"openlineage": False}, ...):      # весь DAG без лайниджа
+    SparkSubmitOperator(task_id="aggregate", params={"openlineage": True}, ...)  # а эта таска — с ним
+```
+
+- Статический форс (`params={"openlineage": ...}` в коде DAG'а) решается **на парсе DAG-файла**:
+  форс-выключение останавливает политику до дозаписи колбэка, и никакая правка на запуске это уже
+  не изменит. Нейтральный ключ (см. ниже) колбэк не блокирует, а Airflow мерджит `conf` из формы
+  «Trigger DAG w/ config» в `task.params` перед вызовом колбэка (`[core]
+  dag_run_conf_overrides_params`, включено по умолчанию) — поэтому в этом случае тумблер из формы
+  запуска колбэк увидит и учтёт наравне со статическим форсом.
+- **Объявление ключа — это уже решение, а не подпись к нему.** `Param(True/False, ...)` резолвится в
+  свой дефолт и работает как постоянный форс. Нейтральных вариантов два: не объявлять ключ вовсе
+  (обычный случай, так сделано в обоих DAG'ах стенда) либо
+  `Param(None, type=["null", "boolean"], description=...)` — `None` нейтрален и предупреждений не пишет.
+- Форс-включение **не обходит** ни зонд jar, ни проверку полноты конфига: `True` при недоступном jar
+  или негодном `url` лайнидж не включит, но напишет предупреждение с `dag_id` и `task_id`.
+- Форс-выключение — единственный случай, когда политика молчит: объяснять там нечего.
+
+#### Известные ограничения OpenLineage инъекции Airflow
+
+- `airflow tasks run --read-from-db` (Airflow 2.10+) берёт таску из сериализованного DAG'а в БД:
+  `on_execute_callback` там хранится как исходный текст функции (`get_python_source`), а при
+  десериализации `SerializedBaseOperator` не воссоздаёт из него вызываемый объект — Airflow пытается
+  вызвать получившуюся строку и на каждом запуске таски пишет в её лог `TypeError`
+  (`Failed when executing execute callback`). Лайнидж в этом случае не включается, но ошибка не
+  глушится молча. Используйте CLI без этого флага или полноценный запуск DAG'а.
+- **Rendered Templates** в UI (Admin → DAG → Task → Rendered Templates) не показывает OL-ключи
+  (`spark.extraListeners`, `spark.openlineage.transport.url`, `spark.openlineage.namespace`),
+  потому что инъекция происходит в колбэке после сохранения Rendered Template Instances в БД.
+  Итоговые значения можно видеть в логе задачи.
+- Кэша у политики нет: Airflow форкает свежий процесс под каждую `TaskInstance`, поэтому Variable
+  читается и jar зондируется один раз на запуск таски. Обратная сторона: при недоступном WebHDFS
+  каждая таска платит полный двухпроходный зонд (до `_PROBE_DEADLINE_SEC`, 17 с) перед `execute()`.
+
+Юнит-тесты политики лежат рядом с ней (`airflow/config/tests`) и гоняются
+`tests\test-policy.bat`.
 
 ## Подключения
 
@@ -336,8 +476,60 @@ tests\test-cluster.bat
 | Spark | `tests\test-spark.bat` | Spark Pi на YARN, PySpark, History Server |
 | Hive | `tests\test-hive.bat` | HiveServer2, создание таблиц, SQL-запросы, Metastore |
 | Kyuubi | `tests\test-kyuubi.bat` | Beeline, Spark SQL таблицы, приложения в YARN (нужен профиль `kyuubi`, см. "Опциональные сервисы") |
-| OpenLineage | `tests\test-openlineage.bat` | Marquez API, трассировка Spark, метаданные |
-| Airflow | `tests\test-airflow.bat` | Health контейнеров, импорт DAG'ов, прогон обоих DAG'ов, артефакты в HDFS и лайнидж |
+| OpenLineage | `tests\test-openlineage.bat` | Marquez API/Web, guard отсутствия OL-листенера в общем `spark-defaults.conf`, чистый прямой submit |
+| Airflow | `tests\test-airflow.bat` | Health контейнеров, импорт DAG'ов, прогон обоих DAG'ов, артефакты в HDFS и лайнидж, инъекция OL и тумблер в собранной команде |
+| Cluster policy | `tests\test-policy.bat` | Юнит-тесты `airflow/config/tests` внутри контейнера: тумблер, обе раскладки атрибутов провайдера, зонд jar, разбор конфигов кластера |
+
+### Живые e2e-тесты (`tests/live`)
+
+```bash
+set OL_LIVE_E2E=true
+.venv\Scripts\python.exe -m pytest tests/live
+```
+
+Гоняются хостовым интерпретатором против уже поднятого стенда (`airflow`, `marquez`):
+прогоняют DAG'и через `docker exec` и проверяют лайнидж через REST API Marquez.
+Полный прогон нужно начинать со свежесброшенного стенда. Скипается целиком, если Marquez или
+контейнер Airflow недоступны.
+
+Набор требует явного подтверждения переменной окружения `OL_LIVE_E2E=true` — без неё весь модуль
+скипается ещё до готовностных проверок. Это защита от случайного попадания в разрушительный прогон:
+последний тест набора необратимо отравляет Marquez, а без пина `rootdir` бэйр `pytest`, запущенный
+из родительского каталога `SparkAPI`, собрал бы этот набор как часть своего обычного полного прогона.
+
+Набор не различает варианты образа сам — `tests/live/conftest.py` просто ходит в уже поднятый
+контейнер `hadoop-airflow` и Marquez, какая бы версия Airflow там ни крутилась. Прогнать оба
+варианта — значит прогнать набор дважды, переключив образ между прогонами:
+
+```bash
+set OL_LIVE_E2E=true
+
+# Вариант base (Airflow 2.6.3) — образ, который поднимает start-cluster.bat по умолчанию
+.venv\Scripts\python.exe -m pytest tests/live
+
+# Сборка и переключение на вариант cloud (Airflow 2.10.2)
+docker compose --profile build build airflow-image-cloud
+AIRFLOW_IMAGE=hadoop-cluster-airflow:2.10.2 docker compose up -d airflow
+.venv\Scripts\python.exe -m pytest tests/live
+```
+
+Схема метаданных Airflow при переключении `base → cloud` **мигрирует вперёд** сама
+(`start-airflow.sh` выбирает `db migrate`/`db init` по версии образа). Обратного пути нет:
+**Airflow не поддерживает даунгрейд схемы** — переключение `cloud → base` на том же томе
+метаданных падает на alembic (не может разрешить более новую ревизию назад). Чтобы вернуть стенд
+на базовый образ, том нужно сбросить: `docker compose down -v` перед следующим `start-cluster.bat`.
+
+> Полный прогон `tests/live` оставляет Marquez с отравленным namespace'ом и вечным
+> `500` на `GET /api/v1/namespaces`. Это негативный контроль в
+> `tests/live/test_resolver_e2e.py` делает свою работу — намеренно шлёт в Marquez
+> namespace с запятой, чтобы доказать, что без резолвера multi-host JDBC namespace
+> не нормализуется, — а не поломка стенда. Перед следующим полным прогоном стенд
+> нужно сбросить: `docker compose down -v`.
+>
+> Набор сам это проверяет: если Marquez поднят, но уже отравлен предыдущим
+> прогоном, `tests/live` не скипается и не гоняет DAG'и, а сразу падает с явной
+> ошибкой, требующей `docker compose down -v`. Скип остаётся только для случая
+> "стенд вообще не поднят".
 
 ## Ручное управление
 

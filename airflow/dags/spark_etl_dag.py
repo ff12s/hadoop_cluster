@@ -1,7 +1,8 @@
 """Демонстрационный ETL: генерация parquet в HDFS и его агрегация.
 
 Пара тасок даёт связный input -> output лайнидж в Marquez: его отправляет
-OpenLineage-листенер, уже сконфигурированный в spark-defaults.conf стенда.
+OpenLineage-листенер, который cluster policy стенда (airflow_local_settings.py)
+навешивает на каждый SparkSubmitOperator.
 """
 
 from __future__ import annotations

@@ -1,0 +1,16 @@
+# Срез airflow/requirements_cloud.txt: только то, что участвует в пути cluster policy.
+# Версии скопированы из requirements_cloud.txt дословно. Полный файл содержит 737
+# пинов (aws, azure, gcp, beam, snowflake, dev-тулинг) и даёт многогигабайтный образ;
+# на инъекцию OpenLineage они не влияют. Провайдер openlineage включён намеренно:
+# именно его присутствие отличает cloud-вариант, событий он не шлёт из-за
+# AIRFLOW__OPENLINEAGE__DISABLED=true.
+apache-airflow==2.10.2
+apache-airflow-providers-apache-spark==4.10.0
+apache-airflow-providers-common-compat==1.2.0
+apache-airflow-providers-common-sql==1.16.0
+apache-airflow-providers-fab==1.3.0
+apache-airflow-providers-openlineage==1.11.0
+apache-airflow-providers-postgres==5.12.0
+openlineage-integration-common==1.22.0
+openlineage-python==1.22.0
+psycopg2-binary==2.9.9
