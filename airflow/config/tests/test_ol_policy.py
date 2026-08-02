@@ -237,23 +237,6 @@ def requests_log(monkeypatch: pytest.MonkeyPatch) -> Callable[[Callable[[object]
     return _install
 
 
-@pytest.fixture
-def clock(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
-    """Подменяет модульный источник времени политики управляемым счётчиком.
-
-    Оба TTL-мемо пакета (зонд jar'а и конфиг Variable) реэкспортируют
-    ``utils.now`` под именем ``_now`` — фикстура подменяет обе точки одним
-    и тем же счётчиком.
-
-    :param monkeypatch: фикстура подмены.
-    :return: объект с полем ``now``, которое тест двигает вперёд.
-    """
-    state = SimpleNamespace(now=1000.0)
-    monkeypatch.setattr(ol_policy.probe, "_now", lambda: state.now)
-    monkeypatch.setattr(ol_policy.variable, "_now", lambda: state.now)
-    return state
-
-
 def install_airflow_exceptions(monkeypatch: pytest.MonkeyPatch, names: tuple[str, ...]) -> SimpleNamespace:
     """Подставляет модуль ``airflow.exceptions`` с перечисленными классами.
 
@@ -806,13 +789,16 @@ def test_dag_jars_survive(
     assert "a.jar" in getattr(task, layout.jars)
 
 
-def test_conf_jars_are_taken_into_jars_and_left_intact(
+def test_conf_jars_move_into_jars_attribute(
     layout: SimpleNamespace,
     spark_operator: type,
     variable: Callable[..., SimpleNamespace],
     jar_ok: list[tuple[str, str]],
 ) -> None:
-    """DAG задал только ``conf["spark.jars"]``: элементы уезжают в атрибут jars, ключ conf не тронут.
+    """DAG задал только ``conf["spark.jars"]``: элементы уезжают в атрибут jars, ключ из conf удалён.
+
+    Иначе jar-список был бы объявлен дважды и полагался бы на приоритет
+    ``--jars`` над ``spark.jars`` у spark-submit.
 
     :param layout: раскладка атрибутов conf/jars текущего провайдера (параметризована).
     :param spark_operator: фикстура, подменяющая распознавание ``SparkSubmitOperator`` дублём текущей раскладки.
@@ -826,7 +812,30 @@ def test_conf_jars_are_taken_into_jars_and_left_intact(
     _run_callback(task)
 
     assert jars_of(task, layout) == "b.jar,hdfs:///jars/openlineage-spark.jar"
-    assert conf_of(task, layout)["spark.jars"] == "b.jar"
+    assert "spark.jars" not in conf_of(task, layout)
+
+
+def test_non_string_conf_jars_stay_in_conf(
+    layout: SimpleNamespace,
+    spark_operator: type,
+    variable: Callable[..., SimpleNamespace],
+    jar_ok: list[tuple[str, str]],
+) -> None:
+    """Нестроковый ``conf["spark.jars"]`` не мерджится и не удаляется: значение DAG'а не теряется молча.
+
+    :param layout: раскладка атрибутов conf/jars текущего провайдера (параметризована).
+    :param spark_operator: фикстура, подменяющая распознавание ``SparkSubmitOperator`` дублём текущей раскладки.
+    :param variable: фикстура, подменяющая чтение Variable ``openlineage_config``.
+    :param jar_ok: фикстура, подменяющая зонд успешным ответом; список вызовов зонда.
+    :return: None.
+    """
+    variable(raw=VALID_VARIABLE)
+    task = make_task(layout, conf={"spark.jars": ["b.jar"]})
+
+    _run_callback(task)
+
+    assert jars_of(task, layout) == "hdfs:///jars/openlineage-spark.jar"
+    assert conf_of(task, layout)["spark.jars"] == ["b.jar"]
 
 
 def test_both_jar_sources_are_merged(
@@ -1257,72 +1266,6 @@ def test_probe_down_after_two_passes(
     assert any("недоступны" in message for message in warnings_of(caplog))
 
 
-def test_error_memo_expires_faster_than_found(
-    endpoints: Callable[[list[str]], None],
-    requests_log: Callable[[Callable[[object], object]], list[object]],
-    monkeypatch: pytest.MonkeyPatch,
-    clock: SimpleNamespace,
-) -> None:
-    """Ошибочный исход мемоизируется на _MEMO_ERROR_TTL_SEC, не на _MEMO_TTL_SEC.
-
-    :param endpoints: фикстура-настройщик списка эндпоинтов WebHDFS.
-    :param requests_log: фикстура-настройщик ``urlopen``, возвращающая список запрошенных URL.
-    :param monkeypatch: фикстура подмены атрибутов и окружения.
-    :param clock: фикстура управляемого времени TTL-мемо.
-    :return: None.
-    """
-    endpoints(["http://nn1:9870"])
-    monkeypatch.setattr(ol_policy.probe, "_sleep", lambda seconds: None)
-    calls = requests_log(lambda url: OSError("refused"))
-    assert ol_policy.probe.jar_available("hdfs:///jars/ol.jar", "/jars/ol.jar") is False
-    first = len(calls)
-
-    clock.now += ol_policy.probe._MEMO_ERROR_TTL_SEC - 1
-    assert ol_policy.probe.jar_available("hdfs:///jars/ol.jar", "/jars/ol.jar") is False
-    assert len(calls) == first  # мемо ещё живо
-
-    clock.now += 2
-    ol_policy.probe.jar_available("hdfs:///jars/ol.jar", "/jars/ol.jar")
-    assert len(calls) > first  # протухло — зонд сходил снова
-
-
-def test_probe_memoizes_by_jar_uri(
-    endpoints: Callable[[list[str]], None], requests_log: Callable[..., list[str]], clock: SimpleNamespace
-) -> None:
-    """Второй вызов с тем же URI в сеть не ходит.
-
-    :param endpoints: фикстура-настройщик списка эндпоинтов WebHDFS.
-    :param requests_log: фикстура-настройщик ``urlopen``, возвращающая список запрошенных URL.
-    :param clock: фикстура управляемого времени TTL-мемо.
-    :return: None.
-    """
-    endpoints(["http://nn1:9870"])
-    urls = requests_log(lambda url: FakeResponse(200))
-
-    assert ol_policy.jar_available(JAR, "/opt/ol.jar") is True
-    assert ol_policy.jar_available(JAR, "/opt/ol.jar") is True
-    assert len(urls) == 1
-
-
-def test_probe_memo_expires(
-    endpoints: Callable[[list[str]], None], requests_log: Callable[..., list[str]], clock: SimpleNamespace
-) -> None:
-    """По истечении TTL отрицательный результат переобнаруживается, а не залипает.
-
-    :param endpoints: фикстура-настройщик списка эндпоинтов WebHDFS.
-    :param requests_log: фикстура-настройщик ``urlopen``, возвращающая список запрошенных URL.
-    :param clock: фикстура управляемого времени TTL-мемо.
-    :return: None.
-    """
-    endpoints(["http://nn1:9870"])
-    urls = requests_log(lambda url: HTTPError(url, 404, "Not Found", {}, None))
-
-    assert ol_policy.jar_available(JAR, "/opt/ol.jar") is False
-    clock.now += ol_policy.probe._MEMO_TTL_SEC + 1
-    assert ol_policy.jar_available(JAR, "/opt/ol.jar") is False
-    assert len(urls) == 2
-
-
 def test_probe_returns_within_deadline(
     monkeypatch: pytest.MonkeyPatch,
     endpoints: Callable[[list[str]], None],
@@ -1353,33 +1296,6 @@ def test_probe_returns_within_deadline(
     assert result is False
     assert elapsed < 2.0
     assert any("дедлайн" in message for message in warnings_of(caplog))
-
-
-def test_late_thread_does_not_overwrite_memo(
-    monkeypatch: pytest.MonkeyPatch,
-    endpoints: Callable[[list[str]], None],
-    requests_log: Callable[..., list[str]],
-) -> None:
-    """Поток, доехавший после дедлайна, не переписывает опубликованный ``False``.
-
-    :param monkeypatch: фикстура подмены атрибутов и окружения.
-    :param endpoints: фикстура-настройщик списка эндпоинтов WebHDFS.
-    :param requests_log: фикстура-настройщик ``urlopen``, возвращающая список запрошенных URL.
-    :return: None.
-    """
-    monkeypatch.setattr(ol_policy.probe, "_PROBE_DEADLINE_SEC", 0.1)
-    endpoints(["http://nn1:9870"])
-
-    def _slow(url: str) -> object:
-        time.sleep(0.4)
-        return FakeResponse(200)
-
-    urls = requests_log(_slow)
-
-    assert ol_policy.jar_available(JAR, "/opt/ol.jar") is False
-    time.sleep(0.6)
-    assert ol_policy.jar_available(JAR, "/opt/ol.jar") is False
-    assert len(urls) == 1
 
 
 def test_probe_thread_is_daemon(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1492,20 +1408,6 @@ def test_cfg_returns_none_and_warns(
     assert any(marker in message for message in messages)
 
 
-def test_cfg_is_memoized(variable: Callable[..., SimpleNamespace]) -> None:
-    """Повторный вызов в метастор не ходит.
-
-    :param variable: фикстура, подменяющая чтение Variable ``openlineage_config``.
-    :return: None.
-    """
-    state = variable(raw='{"enabled": true}')
-
-    ol_policy.variable._cfg()
-    ol_policy.variable._cfg()
-
-    assert state.calls == 1
-
-
 def test_cfg_warns_about_auth(variable: Callable[..., SimpleNamespace], caplog: pytest.LogCaptureFixture) -> None:
     """Ключ ``auth`` распознаётся, чтобы отказать явно (инвариант 5).
 
@@ -1549,104 +1451,71 @@ def test_validate_cfg_aggregates_missing_fields(
         )
     )
 
-    assert ol_policy.variable._validate_cfg() is None
+    assert ol_policy.variable._validate(ol_policy.variable._cfg()) is None
 
     messages = warnings_of(caplog)
     aggregated = [m for m in messages if "spark.openlineage.transport.url" in m and "openlineage_jar" in m]
     assert aggregated, f"ожидался агрегированный warning, получили: {messages}"
 
 
-def test_validate_cfg_runs_once_per_ttl(
-    variable: Callable[..., SimpleNamespace], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Четыре обращения к ``_validate_cfg`` подряд — один реальный проход (TTL-мемо ещё живо).
-
-    :param variable: фикстура, подменяющая чтение Variable ``openlineage_config``.
-    :param monkeypatch: фикстура подмены атрибутов и окружения.
-    :return: None.
-    """
-    state = variable(raw=json.dumps({
-        "enabled": True,
-        "spark_conf": {
-            "spark.extraListeners": "io.example.L",
-            "spark.openlineage.transport.url": "http://m:5000",
-            "spark.openlineage.namespace": "ns",
-        },
-        "openlineage_jar": "hdfs://n:9000/o.jar",
-    }))
-    calls = {"n": 0}
-    original = ol_policy.variable._validate_cfg
-
-    def _counted() -> object:
-        """Оборачивает оригинальный ``_validate_cfg``, считая число реальных вызовов.
-
-        :return: результат оригинального ``_validate_cfg``.
-        """
-        calls["n"] += 1
-        return original()
-
-    monkeypatch.setattr(ol_policy.variable, "_validate_cfg", _counted)
-    monkeypatch.setattr(ol_policy.probe, "jar_available", lambda jar_uri, path: True)
-
-    ol_policy.variable._validate_cfg()
-    ol_policy.variable._validate_cfg()
-    ol_policy.variable._validate_cfg()
-    ol_policy.variable._validate_cfg()
-
-    assert calls["n"] == 4
-    assert state.calls == 1  # Variable.get вызван один раз — мемо не протухло
-
-
-def test_cfg_memo_expires_by_ttl(
+def test_callback_reads_variable_once(
+    layout: SimpleNamespace,
+    spark_operator: type,
     variable: Callable[..., SimpleNamespace],
-    clock: SimpleNamespace,
+    jar_ok: list[tuple[str, str]],
 ) -> None:
-    """По истечении TTL Variable перечитывается — правка подхватывается.
+    """Один запуск колбэка — один поход в метастор: значение передаётся вниз, а не перечитывается.
 
+    :param layout: раскладка атрибутов conf/jars текущего провайдера (параметризована).
+    :param spark_operator: фикстура, подменяющая распознавание ``SparkSubmitOperator`` дублём текущей раскладки.
     :param variable: фикстура, подменяющая чтение Variable ``openlineage_config``.
-    :param clock: фикстура управляемого времени TTL-мемо.
+    :param jar_ok: фикстура, подменяющая зонд успешным ответом; список вызовов зонда.
     :return: None.
     """
-    state = variable(raw=SEEDED_VARIABLE)
-    assert ol_policy.variable._cfg() is not None
-    first = state.calls
-    assert ol_policy.variable._cfg() is not None
-    assert state.calls == first  # мемо живо
+    state = variable(raw=VALID_VARIABLE)
 
-    clock.now += ol_policy.variable._TTL_SEC + 1
-    assert ol_policy.variable._cfg() is not None
-    assert state.calls == first + 1  # протухло — перечитали
+    _run_callback(layout.cls(dag=DummyDag(), conf={}))
+
+    assert state.calls == 1
 
 
-def test_validate_cfg_follows_cfg_ttl(
+def test_variable_edit_is_picked_up_by_next_callback(
+    layout: SimpleNamespace,
+    spark_operator: type,
     variable: Callable[..., SimpleNamespace],
-    clock: SimpleNamespace,
+    jar_ok: list[tuple[str, str]],
 ) -> None:
-    """Валидированный конфиг протухает вместе с сырым.
+    """Кэша нет: следующий запуск колбэка видит правку Variable сразу.
 
+    :param layout: раскладка атрибутов conf/jars текущего провайдера (параметризована).
+    :param spark_operator: фикстура, подменяющая распознавание ``SparkSubmitOperator`` дублём текущей раскладки.
     :param variable: фикстура, подменяющая чтение Variable ``openlineage_config``.
-    :param clock: фикстура управляемого времени TTL-мемо.
+    :param jar_ok: фикстура, подменяющая зонд успешным ответом; список вызовов зонда.
     :return: None.
     """
-    variable(raw=SEEDED_VARIABLE)
-    assert ol_policy.variable._validate_cfg() is not None
+    variable(raw=VALID_VARIABLE)
+    first = layout.cls(dag=DummyDag(), conf={})
+    _run_callback(first)
+    assert getattr(first, layout.conf)["spark.openlineage.namespace"] == "stand"
 
-    variable(raw="{not json")
-    clock.now += ol_policy.variable._TTL_SEC + 1
-    assert ol_policy.variable._validate_cfg() is None
+    edited = json.loads(VALID_VARIABLE)
+    edited["spark_conf"]["spark.openlineage.namespace"] = "edited"
+    variable(raw=json.dumps(edited))
+    second = layout.cls(dag=DummyDag(), conf={})
+    _run_callback(second)
+    assert getattr(second, layout.conf)["spark.openlineage.namespace"] == "edited"
 
 
-def test_reset_state_calls_module_resets(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Агрегатор зовёт reset() каждого модуля и не лезет в приватные поля.
+def test_reset_state_resets_warn_dedup(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Агрегатор зовёт reset() логгера — единственного модуля с состоянием.
 
     :param monkeypatch: фикстура подмены атрибутов и окружения.
     :return: None.
     """
     called: list[str] = []
-    for name in ("logger", "variable", "probe", "operator"):
-        monkeypatch.setattr(getattr(ol_policy, name), "reset", lambda name=name: called.append(name))
+    monkeypatch.setattr(ol_policy.logger, "reset", lambda: called.append("logger"))
     ol_policy.reset_state()
-    assert sorted(called) == ["logger", "operator", "probe", "variable"]
+    assert called == ["logger"]
 
 
 def test_force_does_not_bypass_config_validation(
@@ -2065,7 +1934,7 @@ def test_seeded_value_is_accepted_by_the_policy(variable: Callable[..., SimpleNa
     variable(raw=SEEDED_VARIABLE)
 
     assert ol_policy.variable._cfg() == json.loads(SEEDED_VARIABLE)
-    assert ol_policy.variable._validate_cfg() is not None
+    assert ol_policy.variable._validate(ol_policy.variable._cfg()) is not None
 
 
 def test_double_encoded_value_is_not_an_object() -> None:
@@ -2310,7 +2179,7 @@ def test_callback_rejects_bad_url(
 ) -> None:
     """Негодный ``url`` в spark_conf выключает лайнидж целиком: таска остаётся нетронутой.
 
-    Регрессия для параметризованного покрытия URL-валидации ``variable._validate_cfg``,
+    Регрессия для параметризованного покрытия URL-валидации ``variable._validate``,
     ранее закрытого удалённым ``test_macro_rejects_bad_url`` (макро-эра инъекции).
 
     :param layout: раскладка атрибутов conf/jars текущего провайдера (параметризована).
@@ -2349,7 +2218,7 @@ def test_callback_rejects_bad_namespace(
 ) -> None:
     """Негодный ``namespace`` в spark_conf выключает лайнидж целиком: таска остаётся нетронутой.
 
-    Регрессия для параметризованного покрытия namespace-валидации ``variable._validate_cfg``,
+    Регрессия для параметризованного покрытия namespace-валидации ``variable._validate``,
     ранее закрытого удалённым ``test_macro_rejects_bad_namespace`` (макро-эра инъекции).
 
     :param layout: раскладка атрибутов conf/jars текущего провайдера (параметризована).

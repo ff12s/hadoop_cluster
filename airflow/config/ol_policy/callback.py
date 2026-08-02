@@ -64,7 +64,7 @@ def _inject(task: object) -> None:
     if forced is not True and cfg.get("enabled") is not True:
         log.info("ol_policy: лайнидж выключен, Variable.enabled=false и форса DAG'а нет")
         return
-    config = variable._validate_cfg()
+    config = variable._validate(cfg)
     if config is None:
         return
     path = probe.jar_path(config.jar_uri)
@@ -92,6 +92,11 @@ def _write(task: object, attrs: operator.OperatorAttrs, config: variable.Config)
     Порядок записи — инвариант: обрыв между setattr'ами оставляет максимум
     лишний jar без листенера (безопасно), но не листенер без jar'а.
 
+    Строковый ключ ``spark.jars`` из итогового conf удаляется: его элементы
+    уезжают в атрибут jars (``--jars``), а двойное объявление списка полагалось
+    бы на приоритет ``--jars`` у spark-submit. Нестроковое значение (мусор для
+    CSV-мерджа) остаётся в conf как было.
+
     :param task: execution-копия оператора.
     :param attrs: имена атрибутов conf/jars текущей раскладки.
     :param config: проверенный конфиг из Variable.
@@ -109,7 +114,8 @@ def _write(task: object, attrs: operator.OperatorAttrs, config: variable.Config)
         dag_value = cur_conf.get(key)
         if isinstance(dag_value, str) and dag_value and dag_value != ours:
             log.info("ol_policy: %s в DAG-conf=%s переопределяется OL-значением=%s", key, dag_value, ours)
-    setattr(task, attrs.jars, utils.merge_csv(getattr(task, attrs.jars), cur_conf.get("spark.jars"), config.jar_uri))
+    dag_conf_jars = cur_conf.pop("spark.jars", None) if isinstance(cur_conf.get("spark.jars"), str) else None
+    setattr(task, attrs.jars, utils.merge_csv(getattr(task, attrs.jars), dag_conf_jars, config.jar_uri))
     merged_listeners = utils.merge_csv(cur_conf.get("spark.extraListeners"), config.listener)
     log.info("ol_policy: spark.extraListeners=%s", merged_listeners)
     setattr(task, attrs.conf, {

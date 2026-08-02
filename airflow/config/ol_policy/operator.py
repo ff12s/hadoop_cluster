@@ -13,12 +13,11 @@ from typing import NamedTuple
 from . import utils
 from .logger import warn_once
 
-# Кортеж собирается лениво, при первом вызове, а не на уровне модуля: этот
-# модуль импортируется из airflow_local_settings, который settings.initialize()
+# Кортеж собирается лениво, при вызове, а не на уровне модуля: этот модуль
+# импортируется из airflow_local_settings, который settings.initialize()
 # подключает раньше configure_orm() — импорт airflow.exceptions на этом этапе
 # забрал бы его из ещё не до конца инициализированного пакета airflow.
 _PASSTHROUGH_NAMES = ("AirflowTaskTimeout", "AirflowClusterPolicyViolation", "AirflowClusterPolicySkipDag")
-_passthrough_cache: tuple[type[BaseException], ...] | None = None
 
 _ATTR_CANDIDATES: dict[str, tuple[str, ...]] = {"conf": ("conf", "_conf"), "jars": ("jars", "_jars")}
 
@@ -35,30 +34,18 @@ def passthrough_exceptions() -> tuple[type[BaseException], ...]:
 
     Собирается поимённо, каждый класс своим ``try/except``: в 2.6.3 нет
     ``AirflowClusterPolicySkipDag``, и общий ``import`` провалился бы целиком,
-    молча выключив проброс ``AirflowTaskTimeout``.
+    молча выключив проброс ``AirflowTaskTimeout``. Повторный вызов дёшев:
+    ``import_module`` бьёт в ``sys.modules``, кэшировать кортеж незачем.
 
     :return: кортеж классов; пустой, если Airflow недоступен.
     """
-    global _passthrough_cache
-    if _passthrough_cache is None:
-        collected: tuple[type[BaseException], ...] = ()
-        for name in _PASSTHROUGH_NAMES:
-            try:
-                collected += (getattr(importlib.import_module("airflow.exceptions"), name),)
-            except (ImportError, AttributeError):
-                continue
-        _passthrough_cache = collected
-
-    return _passthrough_cache
-
-
-def reset() -> None:
-    """Сбрасывает кэш классов исключений — для изоляции тестов.
-
-    :return: None.
-    """
-    global _passthrough_cache
-    _passthrough_cache = None
+    collected: tuple[type[BaseException], ...] = ()
+    for name in _PASSTHROUGH_NAMES:
+        try:
+            collected += (getattr(importlib.import_module("airflow.exceptions"), name),)
+        except (ImportError, AttributeError):
+            continue
+    return collected
 
 
 def operator_attrs(task: object) -> OperatorAttrs | None:

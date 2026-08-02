@@ -1,10 +1,6 @@
-"""Общие хелперы политики: монотонное время, идентификаторы таски, мердж CSV-значений."""
+"""Общие хелперы политики: идентификаторы таски, мердж CSV-значений."""
 
 from __future__ import annotations
-
-import time
-
-now = time.monotonic
 
 
 def task_dag(task: object) -> object | None:

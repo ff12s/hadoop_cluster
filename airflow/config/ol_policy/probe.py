@@ -1,4 +1,4 @@
-"""Зонд openlineage-spark jar в HDFS: WebHDFS-опрос под дедлайном, мемо по URI.
+"""Зонд openlineage-spark jar в HDFS: WebHDFS-опрос под дедлайном.
 
 Единственное место пакета, которое ходит в сеть, и вызывается оно только из колбэка
 на воркере (почему не на парсе — см. ``parse``).
@@ -17,7 +17,7 @@ from urllib.error import HTTPError
 from urllib.parse import quote, urlparse
 from urllib.request import Request, urlopen
 
-from . import hadoop_conf, handlers, utils
+from . import hadoop_conf, handlers
 from .logger import warn_once
 
 # Исход опроса одного эндпоинта WebHDFS.
@@ -26,7 +26,7 @@ _Outcome = Literal["found", "absent", "standby", "error"]
 # Исход целого зонда: down — кластер не дал авторитетного ответа ни на одном проходе.
 _ProbeOutcome = Literal["found", "absent", "down"]
 
-# Ограничители зонда: дедлайн на весь перебор, таймаут одного эндпоинта, TTL мемо.
+# Ограничители зонда: дедлайн на весь перебор, таймаут одного эндпоинта.
 # Модульные, потому что тесты подменяют их monkeypatch'ем.
 # Арифметика ниже покрывает только HTTP-видимую часть: два прохода по HA-паре
 # NameNode, и на 401 каждый эндпоинт стоит двух запросов (без токена + с
@@ -39,23 +39,12 @@ _ProbeOutcome = Literal["found", "absent", "down"]
 # jar_available: поток обрежется по нему, чем бы он ни был занят.
 _PROBE_DEADLINE_SEC = 17.0
 ENDPOINT_TIMEOUT_SEC = 2.0
-_MEMO_TTL_SEC = 300.0
-_MEMO_ERROR_TTL_SEC = 30.0
 _RETRY_PAUSE_SEC = 0.5
 
 # Ре-экспорты ради тестов: ``monkeypatch.setattr(probe, ...)`` должен попадать в
 # символ, который читает этот модуль, а не в модуль-владелец.
-_now = utils.now
 resolve_webhdfs_urls = hadoop_conf.resolve_webhdfs_urls
 _sleep = time.sleep
-
-# Мемо зонда: jar_uri -> (available, timestamp, ttl). Мемо процессное: при
-# LocalExecutor и стандартном task_runner'е Airflow форкает свежий процесс под
-# каждую TaskInstance, так что это мемо не переживает таску и не демпфирует
-# поток тасок к недоступному кластеру между задачами — оно дедуплицирует
-# только повторные вызовы jar_available внутри одного и того же процесса.
-# Ошибочные исходы живут _MEMO_ERROR_TTL_SEC, авторитетные — _MEMO_TTL_SEC.
-_jar_memo: dict[str, tuple[bool, float, float]] = {}
 
 
 def jar_path(jar_uri: str) -> str | None:
@@ -167,7 +156,7 @@ def _probe(path: str) -> _ProbeOutcome:
     """Перебирает эндпоинты WebHDFS, при сплошных отказах — второй проход.
 
     Ретрай один: транзиентная ошибка сети или сплошные standby на первом
-    проходе не должны выключать лайнидж на весь TTL мемо. Авторитетные ответы
+    проходе не должны выключать лайнидж этой таски. Авторитетные ответы
     (200/404) терминальны сразу.
 
     :param path: абсолютный путь jar'а в HDFS.
@@ -214,78 +203,42 @@ def jar_available(jar_uri: str, path: str) -> bool:
 
     Весь перебор, включая резолв эндпоинтов, уходит в демон-поток: таймаут
     сокета не покрывает ``getaddrinfo``, а зависший вызов стопорил бы колбэк
-    на воркере. Результат брошенного потока отбрасывается — мемо пишет
-    ожидающая сторона, иначе две таски одного файла получили бы разные ответы.
+    на воркере. Результат потока, доехавшего после дедлайна, отбрасывается.
 
-    Мемо по ``jar_uri`` с TTL, зависящим от исхода: авторитетные ответы
-    (``found``/``absent``) живут ``_MEMO_TTL_SEC``, а любой неавторитетный исход
-    (дедлайн, исключение, ``down``) — ``_MEMO_ERROR_TTL_SEC``. Мемо процессное
-    и таску не переживает (см. ``_jar_memo``) — короткий TTL ошибок ускоряет
-    подхват восстановления кластера при повторном обращении в том же процессе,
-    а не демпфирует поток тасок между процессами.
-    Поток, доехавший после дедлайна, мемо не переписывает — поздняя запись
-    потеряла бы актуальность.
+    Кэша нет намеренно: Airflow форкает свежий процесс под каждую TaskInstance,
+    а внутри одного запуска колбэка зонд вызывается ровно один раз.
 
-    :param jar_uri: значение поля ``openlineage_jar``; оно же ключ мемо.
+    :param jar_uri: значение поля ``openlineage_jar`` — для текстов warning'ов.
     :param path: разобранный путь jar'а для WebHDFS.
     :return: True, если jar доступен; False во всех остальных исходах.
     """
-    cached = _jar_memo.get(jar_uri)
-    if cached is not None:
-        value, stamped, ttl = cached
-        if _now() - stamped < ttl:
-            return value
-        _jar_memo.pop(jar_uri, None)
-
     slot: list[_ProbeOutcome | BaseException] = []
     worker = threading.Thread(target=_probe_worker, args=(path, slot), daemon=True, name="openlineage-jar-probe")
     worker.start()
     worker.join(_PROBE_DEADLINE_SEC)
 
     if not slot:
-        available = False
-        ttl = _MEMO_ERROR_TTL_SEC
         warn_once(
             ("probe-deadline",),
             "OpenLineage не включён: зонд jar не уложился в дедлайн %s с (%s)",
             _PROBE_DEADLINE_SEC,
             jar_uri,
         )
-    else:
-        outcome = slot[0]
-        if isinstance(outcome, BaseException):
-            available = False
-            ttl = _MEMO_ERROR_TTL_SEC
-            if isinstance(outcome, handlers.NoEndpointsError):
-                warn_once(
-                    ("no-endpoints",),
-                    "OpenLineage не включён: эндпоинты WebHDFS не определены по HADOOP_CONF_DIR (%s)",
-                    outcome,
-                )
-            else:
-                warn_once(
-                    ("probe-error",),
-                    "OpenLineage не включён: не удалось определить эндпоинты WebHDFS (%s): %s",
-                    jar_uri,
-                    outcome,
-                )
-        elif outcome == "found":
-            available = True
-            ttl = _MEMO_TTL_SEC
-        elif outcome == "absent":
-            available = False
-            ttl = _MEMO_TTL_SEC
+        return False
+    outcome = slot[0]
+    if isinstance(outcome, BaseException):
+        if isinstance(outcome, handlers.NoEndpointsError):
+            warn_once(
+                ("no-endpoints",),
+                "OpenLineage не включён: эндпоинты WebHDFS не определены по HADOOP_CONF_DIR (%s)",
+                outcome,
+            )
         else:
-            available = False
-            ttl = _MEMO_ERROR_TTL_SEC
-
-    _jar_memo[jar_uri] = (available, _now(), ttl)
-    return available
-
-
-def reset() -> None:
-    """Сбрасывает мемо зонда — для изоляции тестов.
-
-    :return: None.
-    """
-    _jar_memo.clear()
+            warn_once(
+                ("probe-error",),
+                "OpenLineage не включён: не удалось определить эндпоинты WebHDFS (%s): %s",
+                jar_uri,
+                outcome,
+            )
+        return False
+    return outcome == "found"

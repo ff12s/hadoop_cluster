@@ -2,6 +2,10 @@
 
 Читается только из колбэка, на воркере (почему не на парсе — см. ``parse``). Никогда
 не бросает: при любой ошибке возвращает None, и лайнидж просто не включается.
+
+Кэша здесь нет намеренно: Airflow форкает свежий процесс под каждую TaskInstance,
+а за один запуск колбэка Variable читается ровно один раз — ``callback`` передаёт
+прочитанное значение в ``_validate`` сам.
 """
 
 from __future__ import annotations
@@ -9,22 +13,9 @@ from __future__ import annotations
 import json
 from typing import NamedTuple
 
-from . import utils
 from .logger import warn_once
 
 VARIABLE = "openlineage_config"
-
-_TTL_SEC = 300.0
-
-# Ре-экспорт ради тестов: фикстура ``clock`` подменяет символ, который читает
-# этот модуль, а не модуль-владелец (тот же приём, что в probe).
-_now = utils.now
-
-# Мемо на процесс с TTL: значение читается несколько раз за один запуск таски,
-# а на исполнителе с переиспользуемыми процессами правка Variable подхватится
-# не позже чем через _TTL_SEC.
-_cfg_memo: tuple[float, dict[str, object] | None] | None = None
-_validated_memo: tuple[float, Config | None] | None = None
 
 
 class Config(NamedTuple):
@@ -51,41 +42,7 @@ def _clean(value: object, *, require_scheme: bool = False) -> str:
     return cleaned
 
 
-def _cfg_with_stamp() -> tuple[float, dict[str, object] | None]:
-    """Конфиг OL из Airflow Variable вместе со штампом мемо, с TTL-мемо на процесс.
-
-    Общая точка правды для ``_cfg`` и ``_validate_cfg``: обеим нужен один и тот же
-    штамп свежести, иначе валидированный конфиг мог бы протухать не в такт с сырым
-    (см. ``_validate_cfg``).
-
-    Колбэк читает конфиг несколько раз за один запуск таски (гейт ``enabled``,
-    затем валидированные значения) — TTL защищает от повторного похода в
-    metastore внутри одного и того же запуска. На исполнителе с переиспользуемыми
-    процессами правка Variable подхватится не позже чем через ``_TTL_SEC``.
-
-    :return: пара (штамп мемо, конфиг); конфиг — словарь с ключами enabled,
-        spark_conf, openlineage_jar, либо None, если его не удалось прочитать
-        или его форма неверна; причина в этом случае уже записана в лог.
-    """
-    global _cfg_memo
-    if _cfg_memo is not None and _now() - _cfg_memo[0] < _TTL_SEC:
-        return _cfg_memo
-    value = _load_cfg()
-    _cfg_memo = (_now(), value)
-    return _cfg_memo
-
-
 def _cfg() -> dict[str, object] | None:
-    """Конфиг OL из Airflow Variable, с TTL-мемо на процесс.
-
-    :return: разобранный конфиг с ключами enabled, spark_conf, openlineage_jar,
-        либо None, если конфиг прочитать не удалось или его форма неверна;
-        причина в этом случае уже записана в лог.
-    """
-    return _cfg_with_stamp()[1]
-
-
-def _load_cfg() -> dict[str, object] | None:
     """Читает и разбирает Variable ``openlineage_config``. Никогда не бросает.
 
     :return: разобранный конфиг с ключами enabled, spark_conf, openlineage_jar,
@@ -112,7 +69,7 @@ def _load_cfg() -> dict[str, object] | None:
         return None
     if "auth" in parsed:
         warn_once(("auth",), "OpenLineage: ключ 'auth' в Variable не поддерживается и не подставляется")
-    # Форма проверяется здесь, содержимое полей — в _validate_cfg: тут решается,
+    # Форма проверяется здесь, содержимое полей — в _validate: тут решается,
     # тот ли это документ вообще, там — годится ли он для включения лайниджа.
     shape_ok = (
         isinstance(parsed.get("enabled"), bool)
@@ -127,25 +84,6 @@ def _load_cfg() -> dict[str, object] | None:
         )
         return None
     return parsed
-
-
-def _validate_cfg() -> Config | None:
-    """Проверяет годность Variable, с мемо на процесс: недостающие поля — одним warning'ом.
-
-    Свежесть не считается отдельным TTL, а завязана на мемо ``_cfg``: валидированное
-    значение пересчитывается ровно тогда, когда обновляется сырое, — иначе валидированный
-    конфиг мог бы протухнуть позже сырого и отдавать старые url/namespace/jar ещё
-    до ``_TTL_SEC`` после его перезагрузки.
-
-    :return: проверенный конфиг либо None, если он непригоден для включения лайниджа.
-    """
-    global _validated_memo
-    stamp, cfg = _cfg_with_stamp()
-    if _validated_memo is not None and _validated_memo[0] == stamp:
-        return _validated_memo[1]
-    value = _validate(cfg)
-    _validated_memo = (stamp, value)
-    return value
 
 
 def _validate(cfg: dict[str, object] | None) -> Config | None:
@@ -182,13 +120,3 @@ def _validate(cfg: dict[str, object] | None) -> Config | None:
         )
         return None
     return config
-
-
-def reset() -> None:
-    """Сбрасывает мемо конфига — для изоляции тестов.
-
-    :return: None.
-    """
-    global _cfg_memo, _validated_memo
-    _cfg_memo = None
-    _validated_memo = None
