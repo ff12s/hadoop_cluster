@@ -9,6 +9,14 @@ from .logger import warn_once
 
 VARIABLE = "openlineage_config"
 
+_CLAIMED_KEYS = frozenset({
+    "spark.extraListeners",
+    "spark.openlineage.transport.type",
+    "spark.openlineage.transport.url",
+    "spark.openlineage.namespace",
+})
+_MANAGED_KEYS = frozenset({"spark.master", "spark.submit.deploymode", "spark.jars"})
+
 
 class Config(NamedTuple):
     """Проверенные поля Variable ``openlineage_config``: все непустые, уже очищенные."""
@@ -16,7 +24,8 @@ class Config(NamedTuple):
     listener: str
     url: str
     namespace: str
-    jar_uri: str
+    jar_uris: tuple[str, ...]
+    extra_conf: dict[str, str]
 
 
 def _clean(value: object, *, require_scheme: bool = False) -> str:
@@ -32,6 +41,38 @@ def _clean(value: object, *, require_scheme: bool = False) -> str:
     if require_scheme and not cleaned.startswith(("http://", "https://")):
         return ""
     return cleaned
+
+
+def _jar_uris(value: object) -> tuple[str, ...]:
+    """Разбирает поле ``openlineage_jar`` как CSV из URI.
+
+    :param value: сырое значение поля.
+    :return: кортеж непустых URI; пустой кортеж, если значение не строка или пусто.
+    """
+    if not isinstance(value, str):
+        return ()
+    return tuple(item.strip() for item in value.split(",") if item.strip())
+
+
+def _extra_conf(spark_conf: dict[str, object]) -> dict[str, str]:
+    """Отбирает ключи ``spark_conf``, которые политика передаёт в таску как есть.
+
+    :param spark_conf: словарь ``spark_conf`` из Variable.
+    :return: ключи сверх обязательных и управляемых стендом, только строковые значения.
+    """
+    extra: dict[str, str] = {}
+    for key, value in spark_conf.items():
+        if not isinstance(key, str) or key in _CLAIMED_KEYS or key.lower() in _MANAGED_KEYS:
+            continue
+        if not isinstance(value, str):
+            warn_once(
+                ("nonstr-conf", key),
+                "OpenLineage: значение ключа %s в spark_conf не строка и не подставляется",
+                key,
+            )
+            continue
+        extra[key] = value
+    return extra
 
 
 def read_config() -> dict[str, object] | None:
@@ -89,7 +130,8 @@ def validate_config(cfg: dict[str, object] | None) -> Config | None:
         listener=_clean(spark_conf.get("spark.extraListeners")),
         url=_clean(spark_conf.get("spark.openlineage.transport.url"), require_scheme=True),
         namespace=_clean(spark_conf.get("spark.openlineage.namespace")),
-        jar_uri=_clean(cfg.get("openlineage_jar")),
+        jar_uris=_jar_uris(cfg.get("openlineage_jar")),
+        extra_conf=_extra_conf(spark_conf),
     )
     missing = [
         name
@@ -97,7 +139,7 @@ def validate_config(cfg: dict[str, object] | None) -> Config | None:
             (config.listener, "spark_conf.spark.extraListeners (непустая строка)"),
             (config.url, "spark_conf.spark.openlineage.transport.url (http/https URL)"),
             (config.namespace, "spark_conf.spark.openlineage.namespace (непустая строка)"),
-            (config.jar_uri, "openlineage_jar (hdfs://... URI)"),
+            (config.jar_uris, "openlineage_jar (CSV из hdfs://... URI)"),
         )
         if not value
     ]

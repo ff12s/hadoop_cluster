@@ -5,8 +5,14 @@ set -euo pipefail
 echo "[init] создаём роль и базу метаданных"
 python /opt/airflow/scripts/ensure_db.py
 
-echo "[init] накатываем схему (в 2.6.x команда называется db init, не migrate)"
-airflow db init
+# 2.7 переименовала db init в db migrate; в 2.6.x подкоманды migrate нет вовсе,
+# поэтому спрашиваем сам Airflow, а не разбираем строку версии.
+echo "[init] накатываем схему"
+if airflow db migrate --help >/dev/null 2>&1; then
+    airflow db migrate
+else
+    airflow db init
+fi
 
 # users create идемпотентна: на существующем пользователе печатает "already exist
 # in the db" и завершается нулём, пароль при этом не меняет.
@@ -36,8 +42,12 @@ print(json.dumps({
         "spark.openlineage.transport.url": "http://marquez:5000",
         "spark.openlineage.namespace": "hadoop-cluster",
         "spark.openlineage.columnLineage.datasetLineageEnabled": "true",
+        "spark.openlineage.dataset.namespaceResolvers.default.type": "normalize",
     },
-    "openlineage_jar": "hdfs://namenode:9000/opt/openlineage/openlineage-spark_2.13-1.46.0.jar",
+    "openlineage_jar": (
+        "hdfs://namenode:9000/opt/openlineage/openlineage-spark_2.13-1.46.0.jar,"
+        "hdfs://namenode:9000/opt/openlineage/openlineage-namespace-resolver.jar"
+    ),
 }))
 PY
 )"

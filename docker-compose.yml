@@ -74,7 +74,18 @@ services:
       dockerfile: Dockerfile
       args:
         <<: *versions
+        AIRFLOW_REQUIREMENTS: requirements_slim.txt
     image: ${AIRFLOW_IMAGE:-hadoop-cluster-airflow:latest}
+    profiles: ["build"]
+  airflow-image-cloud:
+    build:
+      context: ./airflow
+      dockerfile: Dockerfile
+      args:
+        <<: *versions
+        AIRFLOW_VERSION: ${AIRFLOW_CLOUD_VERSION:-2.10.2}
+        AIRFLOW_REQUIREMENTS: requirements_cloud_slim.txt
+    image: ${AIRFLOW_IMAGE_CLOUD:-hadoop-cluster-airflow:2.10.2}
     profiles: ["build"]
   marquez:
     image: marquezproject/marquez:${MARQUEZ_VERSION:-0.47.0}
@@ -241,6 +252,10 @@ services:
       # Единственный способ перезатереть Variable openlineage_config значениями
       # из окружения: обычный старт существующую переменную не трогает.
       OPENLINEAGE_CONFIG_RESEED: ${OPENLINEAGE_CONFIG_RESEED:-false}
+      # Нативный провайдер openlineage есть только в cloud-образе. Его собственный
+      # поток событий смешался бы в Marquez с событиями Spark-листенера, который
+      # навешивает cluster policy, поэтому по умолчанию он выключен.
+      AIRFLOW__OPENLINEAGE__DISABLED: "${AIRFLOW_OPENLINEAGE_PROVIDER_DISABLED:-true}"
     volumes: *airflow-volumes
     ports:
       - "8080:8080"  # Airflow Web UI

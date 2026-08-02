@@ -4,6 +4,14 @@
 ``python -m pytest airflow/config/tests`` без ``PYTHONPATH`` и без установленного
 Airflow. Модульное состояние политики (дедупликация warning'ов) сбрасывается до
 и после каждого теста — оно переживает границу теста, а ``caplog`` нет.
+
+В образе Airflow ``ol_policy.operator.passthrough_exceptions`` при первом же
+перехвате исключения делает настоящий ``import airflow.exceptions``, а тот
+инициализирует ``airflow.settings`` и вызывает ``dictConfig`` — это вытесняет
+хендлер, который ``caplog`` только что поставил для текущего теста. На голом
+хосте Airflow не установлен, импорт падает ``ImportError`` и хендлер цел.
+Фикстура ``_prime_airflow_logging`` прогревает этот импорт на старте сессии,
+до того как какой-либо тест поставит свой хендлер ``caplog``.
 """
 
 from __future__ import annotations
@@ -119,6 +127,25 @@ def layout(request: pytest.FixtureRequest) -> SimpleNamespace:
     :return: пространство имён с классом дубля и именами атрибутов conf/jars.
     """
     return _LAYOUTS[request.param]
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _prime_airflow_logging() -> None:
+    """Прогревает импорт настоящего Airflow один раз до установки хендлера ``caplog``.
+
+    Если Airflow в среде нет (голый хост), импорт падает ``ImportError`` и
+    молча проглатывается — набор обязан оставаться зелёным и без Airflow.
+
+    :return: None.
+    """
+    try:
+        import airflow.exceptions  # noqa: F401
+    except ImportError:
+        return
+    try:
+        import airflow.providers.apache.spark.operators.spark_submit  # noqa: F401
+    except ImportError:
+        pass
 
 
 @pytest.fixture(autouse=True)

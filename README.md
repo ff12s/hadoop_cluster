@@ -480,6 +480,57 @@ tests\test-cluster.bat
 | Airflow | `tests\test-airflow.bat` | Health контейнеров, импорт DAG'ов, прогон обоих DAG'ов, артефакты в HDFS и лайнидж, инъекция OL и тумблер в собранной команде |
 | Cluster policy | `tests\test-policy.bat` | Юнит-тесты `airflow/config/tests` внутри контейнера: тумблер, обе раскладки атрибутов провайдера, зонд jar, разбор конфигов кластера |
 
+### Живые e2e-тесты (`tests/live`)
+
+```bash
+set OL_LIVE_E2E=true
+.venv\Scripts\python.exe -m pytest tests/live
+```
+
+Гоняются хостовым интерпретатором против уже поднятого стенда (`airflow`, `marquez`):
+прогоняют DAG'и через `docker exec` и проверяют лайнидж через REST API Marquez.
+Полный прогон нужно начинать со свежесброшенного стенда. Скипается целиком, если Marquez или
+контейнер Airflow недоступны.
+
+Набор требует явного подтверждения переменной окружения `OL_LIVE_E2E=true` — без неё весь модуль
+скипается ещё до готовностных проверок. Это защита от случайного попадания в разрушительный прогон:
+последний тест набора необратимо отравляет Marquez, а без пина `rootdir` бэйр `pytest`, запущенный
+из родительского каталога `SparkAPI`, собрал бы этот набор как часть своего обычного полного прогона.
+
+Набор не различает варианты образа сам — `tests/live/conftest.py` просто ходит в уже поднятый
+контейнер `hadoop-airflow` и Marquez, какая бы версия Airflow там ни крутилась. Прогнать оба
+варианта — значит прогнать набор дважды, переключив образ между прогонами:
+
+```bash
+set OL_LIVE_E2E=true
+
+# Вариант base (Airflow 2.6.3) — образ, который поднимает start-cluster.bat по умолчанию
+.venv\Scripts\python.exe -m pytest tests/live
+
+# Сборка и переключение на вариант cloud (Airflow 2.10.2)
+docker compose --profile build build airflow-image-cloud
+AIRFLOW_IMAGE=hadoop-cluster-airflow:2.10.2 docker compose up -d airflow
+.venv\Scripts\python.exe -m pytest tests/live
+```
+
+Схема метаданных Airflow при переключении `base → cloud` **мигрирует вперёд** сама
+(`start-airflow.sh` выбирает `db migrate`/`db init` по версии образа). Обратного пути нет:
+**Airflow не поддерживает даунгрейд схемы** — переключение `cloud → base` на том же томе
+метаданных падает на alembic (не может разрешить более новую ревизию назад). Чтобы вернуть стенд
+на базовый образ, том нужно сбросить: `docker compose down -v` перед следующим `start-cluster.bat`.
+
+> Полный прогон `tests/live` оставляет Marquez с отравленным namespace'ом и вечным
+> `500` на `GET /api/v1/namespaces`. Это негативный контроль в
+> `tests/live/test_resolver_e2e.py` делает свою работу — намеренно шлёт в Marquez
+> namespace с запятой, чтобы доказать, что без резолвера multi-host JDBC namespace
+> не нормализуется, — а не поломка стенда. Перед следующим полным прогоном стенд
+> нужно сбросить: `docker compose down -v`.
+>
+> Набор сам это проверяет: если Marquez поднят, но уже отравлен предыдущим
+> прогоном, `tests/live` не скипается и не гоняет DAG'и, а сразу падает с явной
+> ошибкой, требующей `docker compose down -v`. Скип остаётся только для случая
+> "стенд вообще не поднят".
+
 ## Ручное управление
 
 ### Публикация образов в Docker Hub

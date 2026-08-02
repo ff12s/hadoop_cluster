@@ -4,6 +4,33 @@
 
 ## [Unreleased]
 
+### Добавлено
+
+- `ol_policy`: `spark_conf` из Variable `openlineage_config` передаётся в конфиг таски целиком, а не
+  четырьмя валидируемыми ключами — остальные ключи (кроме `spark.master`/`spark.submit.deployMode`,
+  которыми владеет стенд) доезжают до `spark-submit` без изменений. Поле `openlineage_jar` теперь
+  принимает **CSV нескольких URI** (было — одна строка), что позволило подключить jar
+  `openlineage-namespace-resolver.jar` вторым элементом рядом с `openlineage-spark`.
+- Два варианта образа Airflow: `base` (`apache/airflow:2.6.3-python3.10`,
+  `hadoop-cluster-airflow:2.6.3`) и `cloud` (`apache/airflow:2.10.2-python3.10`,
+  `hadoop-cluster-airflow:2.10.2`), оба ставят **срез** реквайрментов
+  (`requirements_slim.txt`/`requirements_cloud_slim.txt`), значимый для пути cluster policy.
+  Compose получает сервис сборки `airflow-image-cloud` в профиле `build`; переключение варианта —
+  переменной окружения, без правки compose.
+- Доказательный DAG `spark_jdbc_lineage_dag` (`airflow/jobs/etl_jdbc_multihost.py`): пишет и читает
+  синтетическую таблицу через multi-host JDBC (`jdbc:postgresql://postgres:5432,marquez-db:5432/...`),
+  чтобы openlineage-spark строил namespace, который Marquez отвергает без резолвера.
+- Набор `tests/live` — pytest-сьют хостовым `.venv` против уже поднятого стенда: прогоняет DAG'и
+  через `docker exec` и проверяет лайнидж через REST API Marquez
+  (`tests/live/test_ol_policy_e2e.py`, `tests/live/test_resolver_e2e.py`, `tests/live/conftest.py`).
+  Скипается, если стенд не поднят. Требует явного `OL_LIVE_E2E=true` — без него весь модуль
+  скипается ещё до готовностных проверок, чтобы бэйр `pytest` не запустил разрушительный прогон
+  случайно.
+- `airflow/scripts/start-airflow.sh` выбирает команду миграции схемы по версии Airflow: `db migrate`
+  для 2.7 и новее, `db init` иначе (версионно-независимая миграция при переключении варианта образа).
+- `scripts/seed-openlineage-jar.bat` заливает в HDFS `/opt/openlineage/` три jar'а вместо одного:
+  `openlineage-spark`, `openlineage-namespace-resolver.jar` и `postgresql-42.2.23.jar`.
+
 ### Изменено
 
 - OpenLineage cluster policy: Variable `openlineage_config` хранит `{enabled, spark_conf, openlineage_jar}`
@@ -93,6 +120,13 @@
 
 ### Исправлено
 
+- Контейнерный прогон юнит-тестов `ol_policy` падал (`test_unexpected_error_is_swallowed_and_logged[private]`
+  красный в контейнере, зелёный на хосте): реальный Airflow импортируется лениво внутри обработчика
+  исключения, его `dictConfig` при первом импорте подменяет хендлеры root-логгера и снимает хендлер
+  `caplog`. Логирование Airflow теперь прогревается один раз за тестовую сессию, до первого теста.
+- Транзитивный `pyspark` удалён из cloud-варианта образа Airflow отдельным слоем после установки
+  среза реквайрментов: пакет раздувал образ и не нужен на пути cluster policy (Spark-джобы едут в
+  YARN, локальный pyspark не исполняется).
 - Набор тестов cluster policy не выполнялся. `pytest.importorskip` стоял на уровне модуля в
   `airflow/config/tests/test_ol_policy.py` и скипал весь файл, а не пять сквозных тестов под собой:
   без установленного Airflow из 228 тестов запускалось 12. Гейт заменён на пер-тестовый `skipif`
@@ -111,3 +145,12 @@
   запросов (без токена и с SPNEGO-токеном): реальный худший случай — 16.5 с против заявленных 8.5,
   из-за чего второй проход-ретрай мог не уложиться в дедлайн ровно там, где SPNEGO и нужен. Дедлайн
   поднят до 17 с с учётом удвоенной стоимости эндпоинта.
+- Бэйр `pytest`, запущенный из родительского каталога `SparkAPI` (там `pytest.ini` без `testpaths`
+  и без `norecursedirs`), собирал разрушительный `tests/live` как часть обычного полного прогона.
+  Добавлен `pytest.ini` в корне `hadoop_cluster`, пинующий `rootdir` этим репозиторием, и
+  `tests/live/conftest.py` теперь скипает весь модуль до готовностных проверок, если не задана
+  `OL_LIVE_E2E=true` — случайное попадание в прогон больше ничего не стоит.
+- `spark.jars` в `spark_conf` Variable `openlineage_config` мог просочиться в `--conf spark.jars`
+  таски мимо мерджа в атрибут `jars`, в отличие от DAG-уровневого `spark.jars`, который колбэк
+  осознанно вынимает из conf и мерджит. Ключ добавлен в `_MANAGED_KEYS` и теперь отбрасывается из
+  passthrough так же, как `spark.master`/`spark.submit.deployMode`.

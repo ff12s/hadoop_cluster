@@ -57,22 +57,23 @@ def _inject(task: object) -> None:
     config = variable.validate_config(cfg)
     if config is None:
         return
-    path = probe.jar_path(config.jar_uri)
-    if path is None:
-        warn_once(
-            ("jar-malformed",),
-            "OpenLineage не включён: openlineage_jar задан без схемы или без пути (%s)",
-            config.jar_uri,
-        )
-        return
-    if not probe.jar_available(config.jar_uri, path):
-        warn_once(
-            ("jar-missing",),
-            "OpenLineage не включён: jar отсутствует или недоступен в HDFS (%s). "
-            "Залейте его: scripts/seed-openlineage-jar.bat",
-            config.jar_uri,
-        )
-        return
+    for jar_uri in config.jar_uris:
+        path = probe.jar_path(jar_uri)
+        if path is None:
+            warn_once(
+                ("jar-malformed", jar_uri),
+                "OpenLineage не включён: openlineage_jar задан без схемы или без пути (%s)",
+                jar_uri,
+            )
+            return
+        if not probe.jar_available(jar_uri, path):
+            warn_once(
+                ("jar-missing", jar_uri),
+                "OpenLineage не включён: jar отсутствует или недоступен в HDFS (%s). "
+                "Залейте его: scripts/seed-openlineage-jar.bat",
+                jar_uri,
+            )
+            return
     _write_lineage(task, attrs, config)
 
 
@@ -90,19 +91,19 @@ def _write_lineage(task: object, attrs: operator.OperatorAttrs, config: variable
         ("spark.openlineage.transport.type", "http"),
         ("spark.openlineage.transport.url", config.url),
         ("spark.openlineage.namespace", config.namespace),
-        ("spark.openlineage.columnLineage.datasetLineageEnabled", "true"),
     )
-    for key, ours in overrides:
+    for key, ours in (*overrides, *config.extra_conf.items()):
         dag_value = cur_conf.get(key)
         if isinstance(dag_value, str) and dag_value and dag_value != ours:
             log.info("ol_policy: %s в DAG-conf=%s переопределяется OL-значением=%s", key, dag_value, ours)
     dag_conf_jars = cur_conf.pop("spark.jars", None) if isinstance(cur_conf.get("spark.jars"), str) else None
     # jars пишется раньше conf: обрыв между setattr'ами оставит лишний jar, но не листенер без jar'а.
-    setattr(task, attrs.jars, utils.merge_csv(getattr(task, attrs.jars), dag_conf_jars, config.jar_uri))
+    setattr(task, attrs.jars, utils.merge_csv(getattr(task, attrs.jars), dag_conf_jars, *config.jar_uris))
     merged_listeners = utils.merge_csv(cur_conf.get("spark.extraListeners"), config.listener)
     log.info("ol_policy: spark.extraListeners=%s", merged_listeners)
     setattr(task, attrs.conf, {
         **cur_conf,
+        **config.extra_conf,
         "spark.extraListeners": merged_listeners,
         **dict(overrides),
     })

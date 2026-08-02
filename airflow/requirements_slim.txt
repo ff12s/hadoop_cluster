@@ -1,0 +1,10 @@
+# Срез airflow/requirements.txt: только то, что участвует в пути cluster policy
+# (ядро Airflow, SparkSubmitOperator, метаданные в PostgreSQL). Версии скопированы
+# из requirements.txt дословно. Драйверы Oracle, MSSQL, Hive, Kafka и Kerberos
+# исключены: они требуют системных -dev пакетов, отсутствующих в базовом образе
+# Airflow, и на инъекцию OpenLineage не влияют.
+apache-airflow==2.6.3
+apache-airflow-providers-apache-spark==4.1.1
+apache-airflow-providers-common-sql==1.5.2
+apache-airflow-providers-postgres==5.5.1
+psycopg2-binary==2.9.6

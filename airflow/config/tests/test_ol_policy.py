@@ -1458,6 +1458,106 @@ def test_validate_cfg_aggregates_missing_fields(
     assert aggregated, f"ожидался агрегированный warning, получили: {messages}"
 
 
+def test_jar_uris_splits_csv(variable: Callable[..., SimpleNamespace]) -> None:
+    """Поле openlineage_jar разбирается как CSV из нескольких URI.
+
+    :param variable: фикстура подмены Variable.
+    :return: None.
+    """
+    variable(raw=json.dumps({
+        "enabled": True,
+        "spark_conf": {
+            "spark.extraListeners": "io.openlineage.spark.agent.OpenLineageSparkListener",
+            "spark.openlineage.transport.url": "http://marquez:5000",
+            "spark.openlineage.namespace": "hadoop-cluster",
+        },
+        "openlineage_jar": "hdfs://nn:9000/a.jar, hdfs://nn:9000/b.jar",
+    }))
+    config = ol_policy.variable.validate_config(ol_policy.variable.read_config())
+    assert config is not None
+    assert config.jar_uris == ("hdfs://nn:9000/a.jar", "hdfs://nn:9000/b.jar")
+
+
+def test_extra_conf_carries_unclaimed_spark_conf_keys(variable: Callable[..., SimpleNamespace]) -> None:
+    """Ключи spark_conf сверх обязательных попадают в extra_conf.
+
+    :param variable: фикстура подмены Variable.
+    :return: None.
+    """
+    variable(raw=json.dumps({
+        "enabled": True,
+        "spark_conf": {
+            "spark.extraListeners": "io.openlineage.spark.agent.OpenLineageSparkListener",
+            "spark.openlineage.transport.url": "http://marquez:5000",
+            "spark.openlineage.namespace": "hadoop-cluster",
+            "spark.openlineage.dataset.namespaceResolvers.default.type": "normalize",
+            "spark.master": "local[1]",
+        },
+        "openlineage_jar": "hdfs://nn:9000/a.jar",
+    }))
+    config = ol_policy.variable.validate_config(ol_policy.variable.read_config())
+    assert config is not None
+    assert config.extra_conf == {"spark.openlineage.dataset.namespaceResolvers.default.type": "normalize"}
+
+
+def test_extra_conf_drops_spark_jars(variable: Callable[..., SimpleNamespace]) -> None:
+    """``spark.jars`` в ``spark_conf`` Variable — управляемый ключ, в extra_conf не попадает.
+
+    Регрессия для асимметрии с DAG-уровневым ``spark.jars``: тот колбэк осознанно вынимает из
+    conf и мерджит в атрибут ``jars`` (см. ``callback._write_lineage``), а Variable-уровневый без
+    этой записи в ``_MANAGED_KEYS`` проезжал бы в conf таски мимо мерджа.
+
+    :param variable: фикстура подмены Variable.
+    :return: None.
+    """
+    variable(raw=json.dumps({
+        "enabled": True,
+        "spark_conf": {
+            "spark.extraListeners": "io.openlineage.spark.agent.OpenLineageSparkListener",
+            "spark.openlineage.transport.url": "http://marquez:5000",
+            "spark.openlineage.namespace": "hadoop-cluster",
+            "spark.jars": "hdfs://nn:9000/sneaky.jar",
+        },
+        "openlineage_jar": "hdfs://nn:9000/a.jar",
+    }))
+    config = ol_policy.variable.validate_config(ol_policy.variable.read_config())
+    assert config is not None
+    assert config.extra_conf == {}
+
+
+def test_variable_spark_jars_does_not_reach_task_conf(
+    layout: SimpleNamespace,
+    spark_operator: type,
+    variable: Callable[..., SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``spark.jars`` из Variable ``spark_conf`` не доезжает до conf таски мимо мерджа jars.
+
+    :param layout: раскладка атрибутов оператора.
+    :param spark_operator: фикстура, подменяющая распознавание ``SparkSubmitOperator`` дублём текущей раскладки.
+    :param variable: фикстура подмены Variable.
+    :param monkeypatch: фикстура подмены.
+    :return: None.
+    """
+    monkeypatch.setattr(ol_policy.probe, "jar_available", lambda jar_uri, path: True)
+    variable(raw=json.dumps({
+        "enabled": True,
+        "spark_conf": {
+            "spark.extraListeners": "io.openlineage.spark.agent.OpenLineageSparkListener",
+            "spark.openlineage.transport.url": "http://marquez:5000",
+            "spark.openlineage.namespace": "hadoop-cluster",
+            "spark.jars": "hdfs://nn:9000/sneaky.jar",
+        },
+        "openlineage_jar": "hdfs://nn:9000/ol.jar",
+    }))
+    task = make_task(layout, jars="a.jar")
+    ol_policy.ol_execute_callback({"task": task})
+    conf = conf_of(task, layout)
+    assert conf is not None
+    assert "spark.jars" not in conf
+    assert jars_of(task, layout) == "a.jar,hdfs://nn:9000/ol.jar"
+
+
 def test_callback_reads_variable_once(
     layout: SimpleNamespace,
     spark_operator: type,
@@ -2080,7 +2180,16 @@ def test_callback_injects_all_keys_on_success(
     :param jar_ok: фикстура, подменяющая зонд успешным ответом; список вызовов зонда.
     :return: None.
     """
-    variable(raw=VALID_VARIABLE)
+    variable(raw=json.dumps({
+        "enabled": True,
+        "spark_conf": {
+            "spark.extraListeners": "io.openlineage.spark.agent.OpenLineageSparkListener",
+            "spark.openlineage.transport.url": "http://marquez:5000",
+            "spark.openlineage.namespace": "stand",
+            "spark.openlineage.columnLineage.datasetLineageEnabled": "true",
+        },
+        "openlineage_jar": "hdfs:///jars/openlineage-spark.jar",
+    }))
     task = layout.cls(dag=DummyDag(), conf={"spark.executor.cores": "2"}, jars="hdfs:///user/app.jar")
 
     _run_callback(task)
@@ -2245,6 +2354,81 @@ def test_callback_rejects_bad_namespace(
     assert getattr(task, layout.conf) == conf_before
     assert getattr(task, layout.jars) == "a.jar"
     assert any("namespace" in message for message in warnings_of(caplog))
+
+
+def test_extra_conf_reaches_task_conf(
+    layout: SimpleNamespace,
+    spark_operator: type,
+    variable: Callable[..., SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ключ резолвера из spark_conf доезжает до conf таски.
+
+    :param layout: раскладка атрибутов оператора.
+    :param spark_operator: фикстура, подменяющая распознавание ``SparkSubmitOperator`` дублём текущей раскладки.
+    :param variable: фикстура подмены Variable.
+    :param monkeypatch: фикстура подмены.
+    :return: None.
+    """
+    monkeypatch.setattr(ol_policy.probe, "jar_available", lambda jar_uri, path: True)
+    variable(raw=json.dumps({
+        "enabled": True,
+        "spark_conf": {
+            "spark.extraListeners": "io.openlineage.spark.agent.OpenLineageSparkListener",
+            "spark.openlineage.transport.url": "http://marquez:5000",
+            "spark.openlineage.namespace": "hadoop-cluster",
+            "spark.openlineage.dataset.namespaceResolvers.default.type": "normalize",
+        },
+        "openlineage_jar": "hdfs://nn:9000/ol.jar,hdfs://nn:9000/resolver.jar",
+    }))
+    task = make_task(layout)
+    ol_policy.ol_execute_callback({"task": task})
+    conf = conf_of(task, layout)
+    assert conf is not None
+    assert conf["spark.openlineage.dataset.namespaceResolvers.default.type"] == "normalize"
+    assert jars_of(task, layout) == "hdfs://nn:9000/ol.jar,hdfs://nn:9000/resolver.jar"
+
+
+def test_every_jar_uri_is_probed(
+    layout: SimpleNamespace,
+    spark_operator: type,
+    variable: Callable[..., SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Зонд вызывается для каждого URI из CSV, отсутствие любого гасит лайнидж.
+
+    :param layout: раскладка атрибутов оператора.
+    :param spark_operator: фикстура, подменяющая распознавание ``SparkSubmitOperator`` дублём текущей раскладки.
+    :param variable: фикстура подмены Variable.
+    :param monkeypatch: фикстура подмены.
+    :return: None.
+    """
+    probed: list[str] = []
+
+    def _available(jar_uri: str, path: str) -> bool:
+        """Дубль зонда: помнит запрошенные URI, второй объявляет отсутствующим.
+
+        :param jar_uri: URI jar'а.
+        :param path: путь внутри HDFS.
+        :return: True для первого URI, False для остальных.
+        """
+        probed.append(jar_uri)
+        return len(probed) == 1
+
+    monkeypatch.setattr(ol_policy.probe, "jar_available", _available)
+    variable(raw=json.dumps({
+        "enabled": True,
+        "spark_conf": {
+            "spark.extraListeners": "io.openlineage.spark.agent.OpenLineageSparkListener",
+            "spark.openlineage.transport.url": "http://marquez:5000",
+            "spark.openlineage.namespace": "hadoop-cluster",
+        },
+        "openlineage_jar": "hdfs://nn:9000/ol.jar,hdfs://nn:9000/resolver.jar",
+    }))
+    task = make_task(layout)
+    ol_policy.ol_execute_callback({"task": task})
+    assert probed == ["hdfs://nn:9000/ol.jar", "hdfs://nn:9000/resolver.jar"]
+    assert jars_of(task, layout) is None
 
 
 def test_callback_url_overrides_dag_value_with_log(
