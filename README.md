@@ -324,8 +324,12 @@ with DAG(dag_id="spark_etl_dag", params={"openlineage": False}, ...):      # в�
     SparkSubmitOperator(task_id="aggregate", params={"openlineage": True}, ...)  # а эта таска — с ним
 ```
 
-- Решение принимается **на парсе DAG-файла**. Тумблер виден в форме «Trigger DAG w/ config», но
-  правка в ней ни на что не влияет: инъекция уже произошла.
+- Статический форс (`params={"openlineage": ...}` в коде DAG'а) решается **на парсе DAG-файла**:
+  форс-выключение останавливает политику до дозаписи колбэка, и никакая правка на запуске это уже
+  не изменит. Нейтральный ключ (см. ниже) колбэк не блокирует, а Airflow мерджит `conf` из формы
+  «Trigger DAG w/ config» в `task.params` перед вызовом колбэка (`[core]
+  dag_run_conf_overrides_params`, включено по умолчанию) — поэтому в этом случае тумблер из формы
+  запуска колбэк увидит и учтёт наравне со статическим форсом.
 - **Объявление ключа — это уже решение, а не подпись к нему.** `Param(True/False, ...)` резолвится в
   свой дефолт и работает как постоянный форс. Нейтральных вариантов два: не объявлять ключ вовсе
   (обычный случай, так сделано в обоих DAG'ах стенда) либо
@@ -336,12 +340,22 @@ with DAG(dag_id="spark_etl_dag", params={"openlineage": False}, ...):      # в�
 
 #### Известные ограничения OpenLineage инъекции Airflow
 
-- `airflow tasks run --read-from-db` (Airflow 2.10+) минует cluster policy — `on_execute_callback` не
-  навешивается, и лайнидж не инжектится. Используйте CLI без этого флага или полноценный запуск DAG'а.
+- `airflow tasks run --read-from-db` (Airflow 2.10+) берёт таску из сериализованного DAG'а в БД:
+  `on_execute_callback` там хранится как исходный текст функции (`get_python_source`), а при
+  десериализации `SerializedBaseOperator` не воссоздаёт из него вызываемый объект — Airflow пытается
+  вызвать получившуюся строку и на каждом запуске таски пишет в её лог `TypeError`
+  (`Failed when executing execute callback`). Лайнидж в этом случае не включается, но ошибка не
+  глушится молча. Используйте CLI без этого флага или полноценный запуск DAG'а.
 - **Rendered Templates** в UI (Admin → DAG → Task → Rendered Templates) не показывает OL-ключи
   (`spark.extraListeners`, `spark.openlineage.transport.url`, `spark.openlineage.namespace`),
   потому что инъекция происходит в колбэке после сохранения Rendered Template Instances в БД.
   Итоговые значения можно видеть в логе задачи.
+- Мемо зонда jar'а (`probe._jar_memo`) и мемо Variable (`variable._cfg_memo`/`_validated_memo`) —
+  процессные. На `LocalExecutor` и стандартном `task_runner`'е Airflow форкает свежий процесс под
+  каждую `TaskInstance`, так что эти мемо не переживают таску и не демпфируют поток тасок к
+  недоступному кластеру между задачами — они дедуплицируют только повторные обращения внутри одного
+  и того же процесса. При недоступном WebHDFS каждая таска платит полный двухпроходный зонд
+  (до `_PROBE_DEADLINE_SEC`) заново.
 
 Юнит-тесты политики лежат рядом с ней (`airflow/config/tests`) и гоняются
 `tests\test-policy.bat`.

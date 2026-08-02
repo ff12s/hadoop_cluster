@@ -191,6 +191,11 @@ def endpoints(monkeypatch: pytest.MonkeyPatch) -> Callable[[list[str]], None]:
     """
 
     def _set(urls: list[str]) -> None:
+        """Подменяет резолвер эндпоинтов заданным списком URL.
+
+        :param urls: список URL эндпоинтов WebHDFS.
+        :return: None.
+        """
         monkeypatch.setattr(ol_policy.probe, "resolve_webhdfs_urls", lambda: list(urls))
 
     return _set
@@ -206,7 +211,20 @@ def requests_log(monkeypatch: pytest.MonkeyPatch) -> Callable[[Callable[[object]
     urls: list[object] = []
 
     def _install(handler: Callable[[object], object]) -> list[object]:
+        """Подставляет ``urlopen`` дублём, делегирующим ответ заданному обработчику.
+
+        :param handler: обработчик, отдающий ответ или исключение по запрошенному URL.
+        :return: список запрошенных URL, пополняемый при каждом вызове дубля.
+        """
+
         def _urlopen(url: object, timeout: float | None = None) -> object:
+            """Дубль ``urlopen``: журналирует URL и делегирует ответ обработчику.
+
+            :param url: запрошенный URL либо объект ``Request``.
+            :param timeout: таймаут запроса; дублем не используется.
+            :return: результат обработчика.
+            :raises BaseException: если обработчик вернул исключение вместо ответа.
+            """
             urls.append(url)
             result = handler(url)
             if isinstance(result, BaseException):
@@ -261,7 +279,11 @@ def install_airflow_exceptions(monkeypatch: pytest.MonkeyPatch, names: tuple[str
 
 
 def test_operator_attrs_resolves_layout(layout: SimpleNamespace) -> None:
-    """Имена conf/jars берутся по факту, а не зашиты."""
+    """Имена conf/jars берутся по факту, а не зашиты.
+
+    :param layout: раскладка атрибутов conf/jars текущего провайдера (параметризована).
+    :return: None.
+    """
     attrs = ol_policy.operator_attrs(make_task(layout))
 
     assert (attrs.conf, attrs.jars) == (layout.conf, layout.jars)
@@ -318,7 +340,13 @@ class NeitherFieldNorAttribute:
 def test_unknown_layout_warns_and_creates_nothing(
     broken: type, jar_ok: list[tuple[str, str]], caplog: pytest.LogCaptureFixture
 ) -> None:
-    """Незнакомая раскладка: warning и ни одного созданного атрибута."""
+    """Незнакомая раскладка: warning и ни одного созданного атрибута.
+
+    :param broken: класс негодной раскладки (параметризован).
+    :param jar_ok: фикстура, подменяющая зонд успешным ответом; список вызовов зонда.
+    :param caplog: фикстура pytest для перехвата записей лога.
+    :return: None.
+    """
     task = broken()
     before = dict(vars(task))
 
@@ -329,19 +357,30 @@ def test_unknown_layout_warns_and_creates_nothing(
 
 
 # ---------------------------------------------------------------------------
-# apply_policy дописывает колбэк на парсе: гейты + идемпотентность (Task 5)
+# apply_policy дописывает колбэк на парсе: гейты + идемпотентность
 # ---------------------------------------------------------------------------
 
 
 def test_policy_appends_callback(layout: SimpleNamespace, spark_operator: type, probe_forbidden: None) -> None:
-    """apply_policy дописывает колбэк, не читая ни Variable, ни сеть."""
+    """apply_policy дописывает колбэк, не читая ни Variable, ни сеть.
+
+    :param layout: раскладка атрибутов conf/jars текущего провайдера (параметризована).
+    :param spark_operator: фикстура, подменяющая распознавание ``SparkSubmitOperator`` дублём текущей раскладки.
+    :param probe_forbidden: фикстура, которая валит тест при любом обращении к зонду.
+    :return: None.
+    """
     task = layout.cls(dag=DummyDag())
     ol_policy.apply_policy(task)
     assert task.on_execute_callback == [ol_policy.callback.ol_execute_callback]
 
 
 def test_policy_append_is_idempotent(layout: SimpleNamespace, spark_operator: type) -> None:
-    """Повторный apply_policy не дублирует колбэк."""
+    """Повторный apply_policy не дублирует колбэк.
+
+    :param layout: раскладка атрибутов conf/jars текущего провайдера (параметризована).
+    :param spark_operator: фикстура, подменяющая распознавание ``SparkSubmitOperator`` дублём текущей раскладки.
+    :return: None.
+    """
     task = layout.cls(dag=DummyDag())
     ol_policy.apply_policy(task)
     ol_policy.apply_policy(task)
@@ -349,7 +388,12 @@ def test_policy_append_is_idempotent(layout: SimpleNamespace, spark_operator: ty
 
 
 def test_policy_keeps_author_callback_first(layout: SimpleNamespace, spark_operator: type) -> None:
-    """Авторский колбэк (одиночный и списочный) сохранён и стоит раньше нашего."""
+    """Авторский колбэк (одиночный и списочный) сохранён и стоит раньше нашего.
+
+    :param layout: раскладка атрибутов conf/jars текущего провайдера (параметризована).
+    :param spark_operator: фикстура, подменяющая распознавание ``SparkSubmitOperator`` дублём текущей раскладки.
+    :return: None.
+    """
     author = lambda context: None  # noqa: E731
     task = layout.cls(dag=DummyDag())
     task.on_execute_callback = author
@@ -358,14 +402,24 @@ def test_policy_keeps_author_callback_first(layout: SimpleNamespace, spark_opera
 
 
 def test_policy_force_off_appends_nothing(layout: SimpleNamespace, spark_operator: type) -> None:
-    """Форс-выключение на парсе: колбэк не навешивается, таска нетронута."""
+    """Форс-выключение на парсе: колбэк не навешивается, таска нетронута.
+
+    :param layout: раскладка атрибутов conf/jars текущего провайдера (параметризована).
+    :param spark_operator: фикстура, подменяющая распознавание ``SparkSubmitOperator`` дублём текущей раскладки.
+    :return: None.
+    """
     task = layout.cls(dag=DummyDag(), params={"openlineage": False})
     ol_policy.apply_policy(task)
     assert task.on_execute_callback is None
 
 
 def test_policy_does_not_touch_dag_and_conf(layout: SimpleNamespace, spark_operator: type) -> None:
-    """Парс не трогает ни conf, ни jars, ни user_defined_macros DAG'а."""
+    """Парс не трогает ни conf, ни jars, ни user_defined_macros DAG'а.
+
+    :param layout: раскладка атрибутов conf/jars текущего провайдера (параметризована).
+    :param spark_operator: фикстура, подменяющая распознавание ``SparkSubmitOperator`` дублём текущей раскладки.
+    :return: None.
+    """
     dag = DummyDag()
     task = layout.cls(dag=dag, conf={"k": "v"}, jars="a.jar")
     ol_policy.apply_policy(task)
@@ -380,7 +434,14 @@ def test_full_cycle_parse_then_callback(
     variable: Callable[..., SimpleNamespace],
     jar_ok: list[tuple[str, str]],
 ) -> None:
-    """apply_policy + вызов колбэков списком даёт готовые значения spark-submit."""
+    """apply_policy + вызов колбэков списком даёт готовые значения spark-submit.
+
+    :param layout: раскладка атрибутов conf/jars текущего провайдера (параметризована).
+    :param spark_operator: фикстура, подменяющая распознавание ``SparkSubmitOperator`` дублём текущей раскладки.
+    :param variable: фикстура, подменяющая чтение Variable ``openlineage_config``.
+    :param jar_ok: фикстура, подменяющая зонд успешным ответом; список вызовов зонда.
+    :return: None.
+    """
     variable(raw=VALID_VARIABLE)
     task = layout.cls(dag=DummyDag(), conf={"spark.executor.cores": "2"}, jars="hdfs:///user/app.jar")
     ol_policy.apply_policy(task)
@@ -400,7 +461,13 @@ def test_full_cycle_parse_then_callback(
 def test_task_force_off_is_silent(
     layout: SimpleNamespace, probe_forbidden: None, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """Форс-выключение таски: тихий отказ без единой записи в лог."""
+    """Форс-выключение таски: тихий отказ без единой записи в лог.
+
+    :param layout: раскладка атрибутов conf/jars текущего провайдера (параметризована).
+    :param probe_forbidden: фикстура, которая валит тест при любом обращении к зонду.
+    :param caplog: фикстура pytest для перехвата записей лога.
+    :return: None.
+    """
     task = make_task(layout, params={"openlineage": False})
 
     ol_policy.inject_openlineage(task)
@@ -413,7 +480,13 @@ def test_task_force_off_is_silent(
 def test_dag_force_off_is_silent(
     layout: SimpleNamespace, probe_forbidden: None, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """Форс-выключение на уровне DAG'а действует так же, как на уровне таски."""
+    """Форс-выключение на уровне DAG'а действует так же, как на уровне таски.
+
+    :param layout: раскладка атрибутов conf/jars текущего провайдера (параметризована).
+    :param probe_forbidden: фикстура, которая валит тест при любом обращении к зонду.
+    :param caplog: фикстура pytest для перехвата записей лога.
+    :return: None.
+    """
     task = make_task(layout, dag=DummyDag(params={"openlineage": False}))
 
     ol_policy.inject_openlineage(task)
@@ -424,7 +497,12 @@ def test_dag_force_off_is_silent(
 
 
 def test_task_force_on_beats_dag_force_off(layout: SimpleNamespace, caplog: pytest.LogCaptureFixture) -> None:
-    """Форс таски перекрывает форс DAG'а: колбэк дописан."""
+    """Форс таски перекрывает форс DAG'а: колбэк дописан.
+
+    :param layout: раскладка атрибутов conf/jars текущего провайдера (параметризована).
+    :param caplog: фикстура pytest для перехвата записей лога.
+    :return: None.
+    """
     task = make_task(
         layout,
         dag=DummyDag(params={"openlineage": False}),
@@ -438,7 +516,12 @@ def test_task_force_on_beats_dag_force_off(layout: SimpleNamespace, caplog: pyte
 
 
 def test_dag_force_on_is_used_when_task_is_silent(layout: SimpleNamespace, caplog: pytest.LogCaptureFixture) -> None:
-    """Форс-включение DAG'а действует, если таска не высказалась."""
+    """Форс-включение DAG'а действует, если таска не высказалась.
+
+    :param layout: раскладка атрибутов conf/jars текущего провайдера (параметризована).
+    :param caplog: фикстура pytest для перехвата записей лога.
+    :return: None.
+    """
     task = make_task(layout, dag=DummyDag(params={"openlineage": True}))
 
     ol_policy.inject_openlineage(task)
@@ -448,7 +531,12 @@ def test_dag_force_on_is_used_when_task_is_silent(layout: SimpleNamespace, caplo
 
 
 def test_missing_toggle_is_neutral_and_silent(layout: SimpleNamespace, caplog: pytest.LogCaptureFixture) -> None:
-    """Ключа нет ни у таски, ни у DAG'а: решение уходит в колбэк, лог пуст."""
+    """Ключа нет ни у таски, ни у DAG'а: решение уходит в колбэк, лог пуст.
+
+    :param layout: раскладка атрибутов conf/jars текущего провайдера (параметризована).
+    :param caplog: фикстура pytest для перехвата записей лога.
+    :return: None.
+    """
     task = make_task(layout)
 
     ol_policy.inject_openlineage(task)
@@ -458,7 +546,12 @@ def test_missing_toggle_is_neutral_and_silent(layout: SimpleNamespace, caplog: p
 
 
 def test_none_toggle_is_neutral_and_silent(layout: SimpleNamespace, caplog: pytest.LogCaptureFixture) -> None:
-    """Объявленный нейтральный ``None`` молчит так же, как отсутствие ключа."""
+    """Объявленный нейтральный ``None`` молчит так же, как отсутствие ключа.
+
+    :param layout: раскладка атрибутов conf/jars текущего провайдера (параметризована).
+    :param caplog: фикстура pytest для перехвата записей лога.
+    :return: None.
+    """
     task = make_task(layout, params={"openlineage": None}, dag=DummyDag(params={"openlineage": None}))
 
     ol_policy.inject_openlineage(task)
@@ -471,7 +564,13 @@ def test_none_toggle_is_neutral_and_silent(layout: SimpleNamespace, caplog: pyte
 def test_non_bool_toggle_warns_and_falls_through(
     layout: SimpleNamespace, caplog: pytest.LogCaptureFixture, value: object
 ) -> None:
-    """Негодное значение тумблера игнорируется с warning'ом, решение уходит ниже."""
+    """Негодное значение тумблера игнорируется с warning'ом, решение уходит ниже.
+
+    :param layout: раскладка атрибутов conf/jars текущего провайдера (параметризована).
+    :param caplog: фикстура pytest для перехвата записей лога.
+    :param value: негодное значение тумблера (параметризовано).
+    :return: None.
+    """
     task = make_task(layout, params={"openlineage": value})
 
     ol_policy.inject_openlineage(task)
@@ -483,7 +582,13 @@ def test_non_bool_toggle_warns_and_falls_through(
 def test_non_bool_task_toggle_does_not_hide_dag_force_off(
     layout: SimpleNamespace, probe_forbidden: None, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """Негодный уровень игнорируется целиком: решает следующий уровень лесенки."""
+    """Негодный уровень игнорируется целиком: решает следующий уровень лесенки.
+
+    :param layout: раскладка атрибутов conf/jars текущего провайдера (параметризована).
+    :param probe_forbidden: фикстура, которая валит тест при любом обращении к зонду.
+    :param caplog: фикстура pytest для перехвата записей лога.
+    :return: None.
+    """
     task = make_task(layout, params={"openlineage": "yes"}, dag=DummyDag(params={"openlineage": False}))
 
     ol_policy.inject_openlineage(task)
@@ -506,7 +611,12 @@ class RaisingParams(dict):
 
 
 def test_raising_params_warns_and_does_not_break(layout: SimpleNamespace, caplog: pytest.LogCaptureFixture) -> None:
-    """Исключение при чтении ``params`` гасится: уровень игнорируется с warning'ом."""
+    """Исключение при чтении ``params`` гасится: уровень игнорируется с warning'ом.
+
+    :param layout: раскладка атрибутов conf/jars текущего провайдера (параметризована).
+    :param caplog: фикстура pytest для перехвата записей лога.
+    :return: None.
+    """
     task = make_task(layout, params=RaisingParams({"openlineage": True}))
 
     ol_policy.inject_openlineage(task)
@@ -516,7 +626,12 @@ def test_raising_params_warns_and_does_not_break(layout: SimpleNamespace, caplog
 
 
 def test_lineage_forced_returns_only_tristate(layout: SimpleNamespace, caplog: pytest.LogCaptureFixture) -> None:
-    """Наружу негодное значение тумблера не отдаётся никогда."""
+    """Наружу негодное значение тумблера не отдаётся никогда.
+
+    :param layout: раскладка атрибутов conf/jars текущего провайдера (параметризована).
+    :param caplog: фикстура pytest для перехвата записей лога.
+    :return: None.
+    """
     assert ol_policy.lineage_forced(make_task(layout, params={"openlineage": "yes"})) is None
     assert ol_policy.lineage_forced(make_task(layout, params={"openlineage": True})) is True
     assert ol_policy.lineage_forced(make_task(layout, params={"openlineage": False})) is False
@@ -531,7 +646,13 @@ def test_lineage_forced_returns_only_tristate(layout: SimpleNamespace, caplog: p
 def test_force_off_beats_foreign_listener_gate(
     layout: SimpleNamespace, probe_forbidden: None, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """Форс-выключение сильнее гейта чужого листенера: лог пуст."""
+    """Форс-выключение сильнее гейта чужого листенера: лог пуст.
+
+    :param layout: раскладка атрибутов conf/jars текущего провайдера (параметризована).
+    :param probe_forbidden: фикстура, которая валит тест при любом обращении к зонду.
+    :param caplog: фикстура pytest для перехвата записей лога.
+    :return: None.
+    """
     task = make_task(
         layout,
         conf={"spark.extraListeners": FOREIGN_LISTENER},
@@ -547,12 +668,17 @@ def test_force_off_beats_foreign_listener_gate(
 
 
 # ---------------------------------------------------------------------------
-# Дозапись колбэка: две таски одного DAG'а, таска без DAG'а (Task 5)
+# Дозапись колбэка: две таски одного DAG'а, таска без DAG'а
 # ---------------------------------------------------------------------------
 
 
 def test_two_tasks_of_one_dag_are_both_injected(layout: SimpleNamespace, caplog: pytest.LogCaptureFixture) -> None:
-    """Обе таски одного DAG'а получают колбэк независимо друг от друга."""
+    """Обе таски одного DAG'а получают колбэк независимо друг от друга.
+
+    :param layout: раскладка атрибутов conf/jars текущего провайдера (параметризована).
+    :param caplog: фикстура pytest для перехвата записей лога.
+    :return: None.
+    """
     dag = DummyDag()
     first = make_task(layout, dag=dag, task_id="generate")
     second = make_task(layout, dag=dag, task_id="aggregate")
@@ -566,7 +692,12 @@ def test_two_tasks_of_one_dag_are_both_injected(layout: SimpleNamespace, caplog:
 
 
 def test_task_without_dag_is_injected_quietly(layout: SimpleNamespace, caplog: pytest.LogCaptureFixture) -> None:
-    """Гейт «таска без DAG» снят: колбэк класть некуда для макроса не нужно, таска дозаписана как обычно."""
+    """Гейт «таска без DAG» снят: колбэк класть некуда для макроса не нужно, таска дозаписана как обычно.
+
+    :param layout: раскладка атрибутов conf/jars текущего провайдера (параметризована).
+    :param caplog: фикстура pytest для перехвата записей лога.
+    :return: None.
+    """
     task = make_task(layout)
     task.dag = None
 
@@ -582,20 +713,33 @@ def test_task_without_dag_is_injected_quietly(layout: SimpleNamespace, caplog: p
 
 
 def test_jar_path_takes_path_only() -> None:
-    """Путь берётся из URI, authority игнорируется."""
+    """Путь берётся из URI, authority игнорируется.
+
+    :return: None.
+    """
     assert ol_policy.jar_path(JAR) == "/opt/openlineage/openlineage-spark_2.13-1.46.0.jar"
 
 
 @pytest.mark.parametrize("value", ["", "   ", "/opt/openlineage/ol.jar", "hdfs://namenode:9000", "ol.jar"])
 def test_jar_path_rejects_malformed(value: str) -> None:
-    """Значение без схемы или без пути годным не считается."""
+    """Значение без схемы или без пути годным не считается.
+
+    :param value: негодное значение поля ``openlineage_jar`` (параметризовано).
+    :return: None.
+    """
     assert ol_policy.jar_path(value) is None
 
 
 def test_endpoint_host_comes_from_resolver_not_from_jar_uri(
     jar_env: str, endpoints: Callable[[list[str]], None], requests_log: Callable[..., list[str]]
 ) -> None:
-    """Хост эндпоинта берётся из конфигов кластера, а не из authority URI jar'а."""
+    """Хост эндпоинта берётся из конфигов кластера, а не из authority URI jar'а.
+
+    :param jar_env: фикстура, задающая ``OPENLINEAGE_JAR`` штатным значением стенда.
+    :param endpoints: фикстура-настройщик списка эндпоинтов WebHDFS.
+    :param requests_log: фикстура-настройщик ``urlopen``, возвращающая список запрошенных URL.
+    :return: None.
+    """
     endpoints(["http://other-host:50070"])
     urls = requests_log(lambda url: FakeResponse(200))
 
@@ -611,12 +755,18 @@ def test_endpoint_host_comes_from_resolver_not_from_jar_uri(
 
 
 def test_merge_jars_keeps_all_three_sources() -> None:
-    """Три источника склеиваются в порядке jars → conf → наш, без дубликатов."""
+    """Три источника склеиваются в порядке jars → conf → наш, без дубликатов.
+
+    :return: None.
+    """
     assert ol_policy.merge_csv("a.jar", "b.jar,a.jar", JAR) == f"a.jar,b.jar,{JAR}"
 
 
 def test_merge_jars_ignores_non_strings() -> None:
-    """``None`` и не-строка дают пустой вклад."""
+    """``None`` и не-строка дают пустой вклад.
+
+    :return: None.
+    """
     assert ol_policy.merge_csv(None, ["b.jar"], JAR) == JAR
 
 
@@ -625,7 +775,11 @@ def test_merge_jars_ignores_non_strings() -> None:
     ["{{ params.jars | join(', ') }}", "{{ macros.pick('a.jar', 'b.jar') }}", "{% if x %}a.jar{% endif %}"],
 )
 def test_merge_jars_does_not_split_jinja(templated: str) -> None:
-    """Значение с Jinja не режется по запятой: выражение осталось бы битым."""
+    """Значение с Jinja не режется по запятой: выражение осталось бы битым.
+
+    :param templated: значение с Jinja-разметкой (параметризовано).
+    :return: None.
+    """
     assert ol_policy.merge_csv(templated, None, JAR) == f"{templated},{JAR}"
     assert ol_policy.merge_csv(None, templated, JAR) == f"{templated},{JAR}"
 
@@ -636,7 +790,14 @@ def test_dag_jars_survive(
     variable: Callable[..., SimpleNamespace],
     jar_ok: list[tuple[str, str]],
 ) -> None:
-    """DAG задал ``jars=``: DAG-jar сохраняется в результате колбэка."""
+    """DAG задал ``jars=``: DAG-jar сохраняется в результате колбэка.
+
+    :param layout: раскладка атрибутов conf/jars текущего провайдера (параметризована).
+    :param spark_operator: фикстура, подменяющая распознавание ``SparkSubmitOperator`` дублём текущей раскладки.
+    :param variable: фикстура, подменяющая чтение Variable ``openlineage_config``.
+    :param jar_ok: фикстура, подменяющая зонд успешным ответом; список вызовов зонда.
+    :return: None.
+    """
     variable(raw=VALID_VARIABLE)
     task = make_task(layout, jars="a.jar")
 
@@ -651,7 +812,14 @@ def test_conf_jars_are_taken_into_jars_and_left_intact(
     variable: Callable[..., SimpleNamespace],
     jar_ok: list[tuple[str, str]],
 ) -> None:
-    """DAG задал только ``conf["spark.jars"]``: элементы уезжают в атрибут jars, ключ conf не тронут."""
+    """DAG задал только ``conf["spark.jars"]``: элементы уезжают в атрибут jars, ключ conf не тронут.
+
+    :param layout: раскладка атрибутов conf/jars текущего провайдера (параметризована).
+    :param spark_operator: фикстура, подменяющая распознавание ``SparkSubmitOperator`` дублём текущей раскладки.
+    :param variable: фикстура, подменяющая чтение Variable ``openlineage_config``.
+    :param jar_ok: фикстура, подменяющая зонд успешным ответом; список вызовов зонда.
+    :return: None.
+    """
     variable(raw=VALID_VARIABLE)
     task = make_task(layout, conf={"spark.jars": "b.jar"})
 
@@ -667,7 +835,14 @@ def test_both_jar_sources_are_merged(
     variable: Callable[..., SimpleNamespace],
     jar_ok: list[tuple[str, str]],
 ) -> None:
-    """DAG задал и ``jars=``, и ``conf["spark.jars"]``: оба смерджены с нашим, без дубликатов."""
+    """DAG задал и ``jars=``, и ``conf["spark.jars"]``: оба смерджены с нашим, без дубликатов.
+
+    :param layout: раскладка атрибутов conf/jars текущего провайдера (параметризована).
+    :param spark_operator: фикстура, подменяющая распознавание ``SparkSubmitOperator`` дублём текущей раскладки.
+    :param variable: фикстура, подменяющая чтение Variable ``openlineage_config``.
+    :param jar_ok: фикстура, подменяющая зонд успешным ответом; список вызовов зонда.
+    :return: None.
+    """
     variable(raw=VALID_VARIABLE)
     task = make_task(layout, jars="a.jar", conf={"spark.jars": "b.jar,a.jar"})
 
@@ -687,7 +862,14 @@ def test_inject_does_not_touch_foreign_conf_keys(
     variable: Callable[..., SimpleNamespace],
     jar_ok: list[tuple[str, str]],
 ) -> None:
-    """Ключи DAG-conf вне lineage-набора остаются как были после колбэка."""
+    """Ключи DAG-conf вне lineage-набора остаются как были после колбэка.
+
+    :param layout: раскладка атрибутов conf/jars текущего провайдера (параметризована).
+    :param spark_operator: фикстура, подменяющая распознавание ``SparkSubmitOperator`` дублём текущей раскладки.
+    :param variable: фикстура, подменяющая чтение Variable ``openlineage_config``.
+    :param jar_ok: фикстура, подменяющая зонд успешным ответом; список вызовов зонда.
+    :return: None.
+    """
     variable(raw=VALID_VARIABLE)
     dag = DummyDag()
     task = layout.cls(dag=dag, conf={"spark.app.name": "demo", "spark.executor.cores": "2"})
@@ -702,7 +884,13 @@ def test_inject_does_not_touch_foreign_conf_keys(
 def test_inject_never_reads_variable(
     layout: SimpleNamespace, probe_forbidden: None, variable: Callable[..., SimpleNamespace]
 ) -> None:
-    """Инвариант 6: парс не ходит в метастор."""
+    """Инвариант 6: парс не ходит в метастор.
+
+    :param layout: раскладка атрибутов conf/jars текущего провайдера (параметризована).
+    :param probe_forbidden: фикстура, которая валит тест при любом обращении к зонду.
+    :param variable: фикстура, подменяющая чтение Variable ``openlineage_config``.
+    :return: None.
+    """
     state = variable(raw=VALID_VARIABLE)
 
     ol_policy.inject_openlineage(layout.cls(dag=DummyDag()))
@@ -711,7 +899,12 @@ def test_inject_never_reads_variable(
 
 
 def test_inject_never_touches_network(layout: SimpleNamespace, probe_forbidden: None) -> None:
-    """Инвариант 7: парс не делает сетевых вызовов."""
+    """Инвариант 7: парс не делает сетевых вызовов.
+
+    :param layout: раскладка атрибутов conf/jars текущего провайдера (параметризована).
+    :param probe_forbidden: фикстура, которая валит тест при любом обращении к зонду.
+    :return: None.
+    """
     ol_policy.inject_openlineage(layout.cls(dag=DummyDag()))
 
 
@@ -719,9 +912,22 @@ def test_inject_ignores_openlineage_jar_env(
     layout: SimpleNamespace,
     spark_operator: type,
     variable: Callable[..., SimpleNamespace],
+    jar_ok: list[tuple[str, str]],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """URI jar'а живёт в Variable; переменной окружения политика не знает."""
+    """URI jar'а живёт в Variable; переменной окружения политика не знает.
+
+    Зонд подменён фикстурой ``jar_ok``, а не запущен по-настоящему: реальный зонд
+    зависит от ``HADOOP_CONF_DIR``/``YARN_CONF_DIR`` окружения, и в среде, где эти
+    переменные указывают на настоящий кластер, тест иначе делал бы живые WebHDFS-запросы.
+
+    :param layout: раскладка атрибутов conf/jars текущего провайдера (параметризована).
+    :param spark_operator: фикстура, подменяющая распознавание ``SparkSubmitOperator`` дублём текущей раскладки.
+    :param variable: фикстура, подменяющая чтение Variable ``openlineage_config``.
+    :param jar_ok: фикстура, подменяющая зонд успешным ответом; список вызовов зонда.
+    :param monkeypatch: фикстура подмены атрибутов и окружения.
+    :return: None.
+    """
     monkeypatch.setenv("OPENLINEAGE_JAR", "hdfs://namenode:9000/from-env.jar")
     variable(raw=VALID_VARIABLE)
     task = layout.cls(dag=DummyDag())
@@ -729,6 +935,7 @@ def test_inject_ignores_openlineage_jar_env(
     _run_callback(task)
 
     assert "from-env.jar" not in (getattr(task, layout.jars) or "")
+    assert all(jar_uri != "hdfs://namenode:9000/from-env.jar" for jar_uri, _ in jar_ok)
 
 
 # ---------------------------------------------------------------------------
@@ -739,7 +946,13 @@ def test_inject_ignores_openlineage_jar_env(
 def test_probe_true_on_200(
     endpoints: Callable[[list[str]], None], requests_log: Callable[..., list[str]], caplog: pytest.LogCaptureFixture
 ) -> None:
-    """200 — jar есть, перебор прекращается."""
+    """200 — jar есть, перебор прекращается.
+
+    :param endpoints: фикстура-настройщик списка эндпоинтов WebHDFS.
+    :param requests_log: фикстура-настройщик ``urlopen``, возвращающая список запрошенных URL.
+    :param caplog: фикстура pytest для перехвата записей лога.
+    :return: None.
+    """
     endpoints(["http://nn1:9870", "http://nn2:9870"])
     urls = requests_log(lambda url: FakeResponse(200))
 
@@ -751,7 +964,13 @@ def test_probe_true_on_200(
 def test_probe_false_on_404_without_warning(
     endpoints: Callable[[list[str]], None], requests_log: Callable[..., list[str]], caplog: pytest.LogCaptureFixture
 ) -> None:
-    """404 — штатное «jar не залит»: False и ни одного warning'а."""
+    """404 — штатное «jar не залит»: False и ни одного warning'а.
+
+    :param endpoints: фикстура-настройщик списка эндпоинтов WebHDFS.
+    :param requests_log: фикстура-настройщик ``urlopen``, возвращающая список запрошенных URL.
+    :param caplog: фикстура pytest для перехвата записей лога.
+    :return: None.
+    """
     endpoints(["http://nn1:9870", "http://nn2:9870"])
     urls = requests_log(lambda url: HTTPError(url, 404, "Not Found", {}, None))
 
@@ -763,7 +982,12 @@ def test_probe_false_on_404_without_warning(
 def test_probe_moves_to_next_endpoint_on_error(
     endpoints: Callable[[list[str]], None], requests_log: Callable[..., list[str]]
 ) -> None:
-    """Сетевая ошибка — следующий эндпоинт."""
+    """Сетевая ошибка — следующий эндпоинт.
+
+    :param endpoints: фикстура-настройщик списка эндпоинтов WebHDFS.
+    :param requests_log: фикстура-настройщик ``urlopen``, возвращающая список запрошенных URL.
+    :return: None.
+    """
     endpoints(["http://nn1:9870", "http://nn2:9870"])
     urls = requests_log(lambda url: URLError("boom") if "nn1" in url else FakeResponse(200))
 
@@ -774,7 +998,13 @@ def test_probe_moves_to_next_endpoint_on_error(
 def test_probe_warns_when_all_endpoints_fail(
     endpoints: Callable[[list[str]], None], requests_log: Callable[..., list[str]], caplog: pytest.LogCaptureFixture
 ) -> None:
-    """Список кончился на сетевых ошибках — False с warning'ом про недоступность."""
+    """Список кончился на сетевых ошибках — False с warning'ом про недоступность.
+
+    :param endpoints: фикстура-настройщик списка эндпоинтов WebHDFS.
+    :param requests_log: фикстура-настройщик ``urlopen``, возвращающая список запрошенных URL.
+    :param caplog: фикстура pytest для перехвата записей лога.
+    :return: None.
+    """
     endpoints(["http://nn1:9870", "http://nn2:9870"])
     requests_log(lambda url: URLError("boom"))
 
@@ -785,7 +1015,13 @@ def test_probe_warns_when_all_endpoints_fail(
 def test_probe_treats_standby_as_next_endpoint(
     endpoints: Callable[[list[str]], None], requests_log: Callable[..., list[str]], caplog: pytest.LogCaptureFixture
 ) -> None:
-    """403 + StandbyException — не отказ, а «спроси активный»."""
+    """403 + StandbyException — не отказ, а «спроси активный».
+
+    :param endpoints: фикстура-настройщик списка эндпоинтов WebHDFS.
+    :param requests_log: фикстура-настройщик ``urlopen``, возвращающая список запрошенных URL.
+    :param caplog: фикстура pytest для перехвата записей лога.
+    :return: None.
+    """
     endpoints(["http://nn1:9870", "http://nn2:9870"])
     requests_log(lambda url: standby_error(url) if "nn1" in url else FakeResponse(200))
 
@@ -796,7 +1032,13 @@ def test_probe_treats_standby_as_next_endpoint(
 def test_probe_warns_distinctly_when_all_standby(
     endpoints: Callable[[list[str]], None], requests_log: Callable[..., list[str]], caplog: pytest.LogCaptureFixture
 ) -> None:
-    """Все NameNode в standby — свой текст warning'а, отличимый от недоступности."""
+    """Все NameNode в standby — свой текст warning'а, отличимый от недоступности.
+
+    :param endpoints: фикстура-настройщик списка эндпоинтов WebHDFS.
+    :param requests_log: фикстура-настройщик ``urlopen``, возвращающая список запрошенных URL.
+    :param caplog: фикстура pytest для перехвата записей лога.
+    :return: None.
+    """
     endpoints(["http://nn1:9870", "http://nn2:9870"])
     requests_log(standby_error)
 
@@ -809,7 +1051,12 @@ def test_probe_warns_distinctly_when_all_standby(
 def test_probe_warns_when_no_endpoints_resolved(
     endpoints: Callable[[list[str]], None], caplog: pytest.LogCaptureFixture
 ) -> None:
-    """Пустой список эндпоинтов — отдельный исход со своим текстом."""
+    """Пустой список эндпоинтов — отдельный исход со своим текстом.
+
+    :param endpoints: фикстура-настройщик списка эндпоинтов WebHDFS.
+    :param caplog: фикстура pytest для перехвата записей лога.
+    :return: None.
+    """
     endpoints([])
 
     assert ol_policy.jar_available(JAR, "/opt/ol.jar") is False
@@ -819,7 +1066,12 @@ def test_probe_warns_when_no_endpoints_resolved(
 def test_probe_warns_when_resolver_raises(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """Битый или отсутствующий XML: False и warning про эндпоинты WebHDFS."""
+    """Битый или отсутствующий XML: False и warning про эндпоинты WebHDFS.
+
+    :param monkeypatch: фикстура подмены атрибутов и окружения.
+    :param caplog: фикстура pytest для перехвата записей лога.
+    :return: None.
+    """
 
     def _raise() -> list[str]:
         raise OSError("нет hdfs-site.xml")
@@ -835,7 +1087,13 @@ def test_probe_401_retries_with_negotiate_header(
     endpoints: Callable[[list[str]], None],
     requests_log: Callable[[Callable[[object], object]], list[object]],
 ) -> None:
-    """401 без auth → повтор того же URL с заголовком Authorization: Negotiate."""
+    """401 без auth → повтор того же URL с заголовком Authorization: Negotiate.
+
+    :param monkeypatch: фикстура подмены атрибутов и окружения.
+    :param endpoints: фикстура-настройщик списка эндпоинтов WebHDFS.
+    :param requests_log: фикстура-настройщик ``urlopen``, возвращающая список запрошенных URL.
+    :return: None.
+    """
     endpoints(["http://nn1:9870"])
     _fake_spnego(monkeypatch, b"tok")
 
@@ -856,7 +1114,14 @@ def test_probe_401_without_spnego_is_error_with_warning(
     requests_log: Callable[[Callable[[object], object]], list[object]],
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """SPNEGO недоступен (нет модуля) → исход error и warning про Kerberos."""
+    """SPNEGO недоступен (нет модуля) → исход error и warning про Kerberos.
+
+    :param monkeypatch: фикстура подмены атрибутов и окружения.
+    :param endpoints: фикстура-настройщик списка эндпоинтов WebHDFS.
+    :param requests_log: фикстура-настройщик ``urlopen``, возвращающая список запрошенных URL.
+    :param caplog: фикстура pytest для перехвата записей лога.
+    :return: None.
+    """
     monkeypatch.setitem(sys.modules, "spnego", None)
     requests_log(lambda url: _http_error(401))
     assert ol_policy.probe._query_endpoint("http://nn1:9870", "/jars/ol.jar") == "error"
@@ -867,7 +1132,12 @@ def test_probe_401_then_404_is_absent(
     monkeypatch: pytest.MonkeyPatch,
     requests_log: Callable[[Callable[[object], object]], list[object]],
 ) -> None:
-    """Авторизованный повтор получил 404 → jar'а нет (absent, без warning'а)."""
+    """Авторизованный повтор получил 404 → jar'а нет (absent, без warning'а).
+
+    :param monkeypatch: фикстура подмены атрибутов и окружения.
+    :param requests_log: фикстура-настройщик ``urlopen``, возвращающая список запрошенных URL.
+    :return: None.
+    """
     _fake_spnego(monkeypatch)
 
     def _handler(url: object) -> object:
@@ -884,7 +1154,13 @@ def test_probe_retries_endpoints_once_on_transient_errors(
     requests_log: Callable[[Callable[[object], object]], list[object]],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Первый проход — сплошные ошибки, второй находит jar: итог found, был sleep."""
+    """Первый проход — сплошные ошибки, второй находит jar: итог found, был sleep.
+
+    :param endpoints: фикстура-настройщик списка эндпоинтов WebHDFS.
+    :param requests_log: фикстура-настройщик ``urlopen``, возвращающая список запрошенных URL.
+    :param monkeypatch: фикстура подмены атрибутов и окружения.
+    :return: None.
+    """
     endpoints(["http://nn1:9870"])
     pauses: list[float] = []
     monkeypatch.setattr(ol_policy.probe, "_sleep", pauses.append)
@@ -911,6 +1187,11 @@ def test_probe_deadline_covers_two_passes_over_ha_pair(
 
     Дедлайн зонда обязан пережить худший случай — 2 прохода x 2 эндпоинта, иначе
     ретрай, добавленный ради HA-кластера, не успевает сработать именно там, где нужен.
+
+    :param endpoints: фикстура-настройщик списка эндпоинтов WebHDFS.
+    :param requests_log: фикстура-настройщик ``urlopen``, возвращающая список запрошенных URL.
+    :param monkeypatch: фикстура подмены атрибутов и окружения.
+    :return: None.
     """
     endpoints(["http://nn1:9870", "http://nn2:9870"])
     pauses: list[float] = []
@@ -929,13 +1210,25 @@ def test_probe_deadline_covers_two_passes_over_ha_pair(
     assert ol_policy.probe._probe("/jars/ol.jar") == "found"
     assert len(attempts) == 4
     assert pauses == [ol_policy.probe._RETRY_PAUSE_SEC]
+    # Арифметика бюджета, а не только число попыток: 2 прохода x 2 эндпоинта x
+    # 2 запроса (без токена + SPNEGO) x ENDPOINT_TIMEOUT_SEC + пауза ретрая
+    # обязана укладываться в дедлайн, иначе правка ENDPOINT_TIMEOUT_SEC или
+    # числа проходов молча вернёт дедлайн из-под HA-ретрая.
+    assert ol_policy.probe._PROBE_DEADLINE_SEC >= (
+        2 * 2 * 2 * ol_policy.probe.ENDPOINT_TIMEOUT_SEC + ol_policy.probe._RETRY_PAUSE_SEC
+    )
 
 
 def test_probe_absent_is_terminal_on_first_pass(
     endpoints: Callable[[list[str]], None],
     requests_log: Callable[[Callable[[object], object]], list[object]],
 ) -> None:
-    """404 авторитетен: второго прохода нет."""
+    """404 авторитетен: второго прохода нет.
+
+    :param endpoints: фикстура-настройщик списка эндпоинтов WebHDFS.
+    :param requests_log: фикстура-настройщик ``urlopen``, возвращающая список запрошенных URL.
+    :return: None.
+    """
     endpoints(["http://nn1:9870"])
     urls = requests_log(lambda url: _http_error(404))
     assert ol_policy.probe._probe("/jars/ol.jar") == "absent"
@@ -948,7 +1241,14 @@ def test_probe_down_after_two_passes(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Оба прохода — ошибки: итог down, эндпоинт спрошен дважды, warning один."""
+    """Оба прохода — ошибки: итог down, эндпоинт спрошен дважды, warning один.
+
+    :param endpoints: фикстура-настройщик списка эндпоинтов WebHDFS.
+    :param requests_log: фикстура-настройщик ``urlopen``, возвращающая список запрошенных URL.
+    :param monkeypatch: фикстура подмены атрибутов и окружения.
+    :param caplog: фикстура pytest для перехвата записей лога.
+    :return: None.
+    """
     endpoints(["http://nn1:9870"])
     monkeypatch.setattr(ol_policy.probe, "_sleep", lambda seconds: None)
     urls = requests_log(lambda url: OSError("refused"))
@@ -963,7 +1263,14 @@ def test_error_memo_expires_faster_than_found(
     monkeypatch: pytest.MonkeyPatch,
     clock: SimpleNamespace,
 ) -> None:
-    """Ошибочный исход мемоизируется на _MEMO_ERROR_TTL_SEC, не на _MEMO_TTL_SEC."""
+    """Ошибочный исход мемоизируется на _MEMO_ERROR_TTL_SEC, не на _MEMO_TTL_SEC.
+
+    :param endpoints: фикстура-настройщик списка эндпоинтов WebHDFS.
+    :param requests_log: фикстура-настройщик ``urlopen``, возвращающая список запрошенных URL.
+    :param monkeypatch: фикстура подмены атрибутов и окружения.
+    :param clock: фикстура управляемого времени TTL-мемо.
+    :return: None.
+    """
     endpoints(["http://nn1:9870"])
     monkeypatch.setattr(ol_policy.probe, "_sleep", lambda seconds: None)
     calls = requests_log(lambda url: OSError("refused"))
@@ -982,7 +1289,13 @@ def test_error_memo_expires_faster_than_found(
 def test_probe_memoizes_by_jar_uri(
     endpoints: Callable[[list[str]], None], requests_log: Callable[..., list[str]], clock: SimpleNamespace
 ) -> None:
-    """Второй вызов с тем же URI в сеть не ходит."""
+    """Второй вызов с тем же URI в сеть не ходит.
+
+    :param endpoints: фикстура-настройщик списка эндпоинтов WebHDFS.
+    :param requests_log: фикстура-настройщик ``urlopen``, возвращающая список запрошенных URL.
+    :param clock: фикстура управляемого времени TTL-мемо.
+    :return: None.
+    """
     endpoints(["http://nn1:9870"])
     urls = requests_log(lambda url: FakeResponse(200))
 
@@ -994,7 +1307,13 @@ def test_probe_memoizes_by_jar_uri(
 def test_probe_memo_expires(
     endpoints: Callable[[list[str]], None], requests_log: Callable[..., list[str]], clock: SimpleNamespace
 ) -> None:
-    """По истечении TTL отрицательный результат переобнаруживается, а не залипает."""
+    """По истечении TTL отрицательный результат переобнаруживается, а не залипает.
+
+    :param endpoints: фикстура-настройщик списка эндпоинтов WebHDFS.
+    :param requests_log: фикстура-настройщик ``urlopen``, возвращающая список запрошенных URL.
+    :param clock: фикстура управляемого времени TTL-мемо.
+    :return: None.
+    """
     endpoints(["http://nn1:9870"])
     urls = requests_log(lambda url: HTTPError(url, 404, "Not Found", {}, None))
 
@@ -1010,7 +1329,14 @@ def test_probe_returns_within_deadline(
     requests_log: Callable[..., list[str]],
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Вызов возвращается не позже дедлайна, даже если висят все эндпоинты."""
+    """Вызов возвращается не позже дедлайна, даже если висят все эндпоинты.
+
+    :param monkeypatch: фикстура подмены атрибутов и окружения.
+    :param endpoints: фикстура-настройщик списка эндпоинтов WebHDFS.
+    :param requests_log: фикстура-настройщик ``urlopen``, возвращающая список запрошенных URL.
+    :param caplog: фикстура pytest для перехвата записей лога.
+    :return: None.
+    """
     monkeypatch.setattr(ol_policy.probe, "_PROBE_DEADLINE_SEC", 0.2)
     endpoints([f"http://nn{index}:9870" for index in range(3)])
 
@@ -1034,7 +1360,13 @@ def test_late_thread_does_not_overwrite_memo(
     endpoints: Callable[[list[str]], None],
     requests_log: Callable[..., list[str]],
 ) -> None:
-    """Поток, доехавший после дедлайна, не переписывает опубликованный ``False``."""
+    """Поток, доехавший после дедлайна, не переписывает опубликованный ``False``.
+
+    :param monkeypatch: фикстура подмены атрибутов и окружения.
+    :param endpoints: фикстура-настройщик списка эндпоинтов WebHDFS.
+    :param requests_log: фикстура-настройщик ``urlopen``, возвращающая список запрошенных URL.
+    :return: None.
+    """
     monkeypatch.setattr(ol_policy.probe, "_PROBE_DEADLINE_SEC", 0.1)
     endpoints(["http://nn1:9870"])
 
@@ -1051,7 +1383,11 @@ def test_late_thread_does_not_overwrite_memo(
 
 
 def test_probe_thread_is_daemon(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Перебор идёт в демон-потоке: пул потоков подвесил бы выход процесса."""
+    """Перебор идёт в демон-потоке: пул потоков подвесил бы выход процесса.
+
+    :param monkeypatch: фикстура подмены атрибутов и окружения.
+    :return: None.
+    """
     seen: list[bool] = []
 
     def _resolve() -> list[str]:
@@ -1070,22 +1406,36 @@ def test_probe_thread_is_daemon(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_cfg_returns_dict(variable: Callable[..., SimpleNamespace]) -> None:
-    """Валидный объект нового формата разбирается в словарь."""
+    """Валидный объект нового формата разбирается в словарь.
+
+    :param variable: фикстура, подменяющая чтение Variable ``openlineage_config``.
+    :return: None.
+    """
+    spark_conf = {
+        "spark.extraListeners": "io.example.L",
+        "spark.openlineage.transport.url": "http://marquez:5000",
+        "spark.openlineage.namespace": "ns",
+    }
     variable(raw=json.dumps({
         "enabled": True,
-        "spark_conf": {"spark.extraListeners": "io.example.L", "spark.openlineage.transport.url": "http://marquez:5000", "spark.openlineage.namespace": "ns"},
+        "spark_conf": spark_conf,
         "openlineage_jar": "hdfs://namenode:9000/opt/ol.jar",
     }))
 
     assert ol_policy.variable._cfg() == {
         "enabled": True,
-        "spark_conf": {"spark.extraListeners": "io.example.L", "spark.openlineage.transport.url": "http://marquez:5000", "spark.openlineage.namespace": "ns"},
+        "spark_conf": spark_conf,
         "openlineage_jar": "hdfs://namenode:9000/opt/ol.jar",
     }
 
 
 def test_cfg_rejects_empty_object(variable: Callable[..., SimpleNamespace], caplog: pytest.LogCaptureFixture) -> None:
-    """Пустой JSON-объект — не годная форма Variable."""
+    """Пустой JSON-объект — не годная форма Variable.
+
+    :param variable: фикстура, подменяющая чтение Variable ``openlineage_config``.
+    :param caplog: фикстура pytest для перехвата записей лога.
+    :return: None.
+    """
     variable(raw="{}")
 
     assert ol_policy.variable._cfg() is None
@@ -1093,7 +1443,12 @@ def test_cfg_rejects_empty_object(variable: Callable[..., SimpleNamespace], capl
 
 
 def test_cfg_rejects_old_shape(variable: Callable[..., SimpleNamespace], caplog: pytest.LogCaptureFixture) -> None:
-    """Старый формат Variable ({enabled, url, namespace}) — не валиден."""
+    """Старый формат Variable ({enabled, url, namespace}) — не валиден.
+
+    :param variable: фикстура, подменяющая чтение Variable ``openlineage_config``.
+    :param caplog: фикстура pytest для перехвата записей лога.
+    :return: None.
+    """
     variable(raw='{"enabled": true, "url": "http://marquez:5000", "namespace": "ns"}')
 
     assert ol_policy.variable._cfg() is None
@@ -1120,7 +1475,15 @@ def test_cfg_returns_none_and_warns(
     error: BaseException | None,
     marker: str,
 ) -> None:
-    """Каждая причина отказа даёт ``None`` и свой warning, а не пустой лог."""
+    """Каждая причина отказа даёт ``None`` и свой warning, а не пустой лог.
+
+    :param variable: фикстура, подменяющая чтение Variable ``openlineage_config``.
+    :param caplog: фикстура pytest для перехвата записей лога.
+    :param raw: сырое значение Variable для сценария (параметризовано).
+    :param error: исключение, которое бросает чтение Variable (параметризовано).
+    :param marker: ожидаемый маркер в тексте warning'а (параметризовано).
+    :return: None.
+    """
     variable(raw=raw, error=error)
 
     assert ol_policy.variable._cfg() is None
@@ -1130,7 +1493,11 @@ def test_cfg_returns_none_and_warns(
 
 
 def test_cfg_is_memoized(variable: Callable[..., SimpleNamespace]) -> None:
-    """Повторный вызов в метастор не ходит."""
+    """Повторный вызов в метастор не ходит.
+
+    :param variable: фикстура, подменяющая чтение Variable ``openlineage_config``.
+    :return: None.
+    """
     state = variable(raw='{"enabled": true}')
 
     ol_policy.variable._cfg()
@@ -1140,8 +1507,22 @@ def test_cfg_is_memoized(variable: Callable[..., SimpleNamespace]) -> None:
 
 
 def test_cfg_warns_about_auth(variable: Callable[..., SimpleNamespace], caplog: pytest.LogCaptureFixture) -> None:
-    """Ключ ``auth`` распознаётся, чтобы отказать явно (инвариант 5)."""
-    variable(raw=json.dumps({"enabled": True, "spark_conf": {"spark.extraListeners": "io.example.L", "spark.openlineage.transport.url": "http://marquez:5000", "spark.openlineage.namespace": "ns"}, "openlineage_jar": "hdfs://n:9000/o.jar", "auth": {"token": "s3cr3t"}}))
+    """Ключ ``auth`` распознаётся, чтобы отказать явно (инвариант 5).
+
+    :param variable: фикстура, подменяющая чтение Variable ``openlineage_config``.
+    :param caplog: фикстура pytest для перехвата записей лога.
+    :return: None.
+    """
+    variable(raw=json.dumps({
+        "enabled": True,
+        "spark_conf": {
+            "spark.extraListeners": "io.example.L",
+            "spark.openlineage.transport.url": "http://marquez:5000",
+            "spark.openlineage.namespace": "ns",
+        },
+        "openlineage_jar": "hdfs://n:9000/o.jar",
+        "auth": {"token": "s3cr3t"},
+    }))
 
     ol_policy.variable._cfg()
 
@@ -1152,7 +1533,12 @@ def test_cfg_warns_about_auth(variable: Callable[..., SimpleNamespace], caplog: 
 def test_validate_cfg_aggregates_missing_fields(
     variable: Callable[..., SimpleNamespace], caplog: pytest.LogCaptureFixture
 ) -> None:
-    """Частичный ``spark_conf`` и пустой ``openlineage_jar`` — один warning с обоими полями."""
+    """Частичный ``spark_conf`` и пустой ``openlineage_jar`` — один warning с обоими полями.
+
+    :param variable: фикстура, подменяющая чтение Variable ``openlineage_config``.
+    :param caplog: фикстура pytest для перехвата записей лога.
+    :return: None.
+    """
     variable(
         raw=json.dumps(
             {
@@ -1173,7 +1559,12 @@ def test_validate_cfg_aggregates_missing_fields(
 def test_validate_cfg_runs_once_per_ttl(
     variable: Callable[..., SimpleNamespace], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Четыре обращения к ``_validate_cfg`` подряд — один реальный проход (TTL-мемо ещё живо)."""
+    """Четыре обращения к ``_validate_cfg`` подряд — один реальный проход (TTL-мемо ещё живо).
+
+    :param variable: фикстура, подменяющая чтение Variable ``openlineage_config``.
+    :param monkeypatch: фикстура подмены атрибутов и окружения.
+    :return: None.
+    """
     state = variable(raw=json.dumps({
         "enabled": True,
         "spark_conf": {
@@ -1187,6 +1578,10 @@ def test_validate_cfg_runs_once_per_ttl(
     original = ol_policy.variable._validate_cfg
 
     def _counted() -> object:
+        """Оборачивает оригинальный ``_validate_cfg``, считая число реальных вызовов.
+
+        :return: результат оригинального ``_validate_cfg``.
+        """
         calls["n"] += 1
         return original()
 
@@ -1206,7 +1601,12 @@ def test_cfg_memo_expires_by_ttl(
     variable: Callable[..., SimpleNamespace],
     clock: SimpleNamespace,
 ) -> None:
-    """По истечении TTL Variable перечитывается — правка подхватывается."""
+    """По истечении TTL Variable перечитывается — правка подхватывается.
+
+    :param variable: фикстура, подменяющая чтение Variable ``openlineage_config``.
+    :param clock: фикстура управляемого времени TTL-мемо.
+    :return: None.
+    """
     state = variable(raw=SEEDED_VARIABLE)
     assert ol_policy.variable._cfg() is not None
     first = state.calls
@@ -1222,7 +1622,12 @@ def test_validate_cfg_follows_cfg_ttl(
     variable: Callable[..., SimpleNamespace],
     clock: SimpleNamespace,
 ) -> None:
-    """Валидированный конфиг протухает вместе с сырым."""
+    """Валидированный конфиг протухает вместе с сырым.
+
+    :param variable: фикстура, подменяющая чтение Variable ``openlineage_config``.
+    :param clock: фикстура управляемого времени TTL-мемо.
+    :return: None.
+    """
     variable(raw=SEEDED_VARIABLE)
     assert ol_policy.variable._validate_cfg() is not None
 
@@ -1232,7 +1637,11 @@ def test_validate_cfg_follows_cfg_ttl(
 
 
 def test_reset_state_calls_module_resets(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Агрегатор зовёт reset() каждого модуля и не лезет в приватные поля."""
+    """Агрегатор зовёт reset() каждого модуля и не лезет в приватные поля.
+
+    :param monkeypatch: фикстура подмены атрибутов и окружения.
+    :return: None.
+    """
     called: list[str] = []
     for name in ("logger", "variable", "probe", "operator"):
         monkeypatch.setattr(getattr(ol_policy, name), "reset", lambda name=name: called.append(name))
@@ -1246,7 +1655,14 @@ def test_force_does_not_bypass_config_validation(
     variable: Callable[..., SimpleNamespace],
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Форс переопределяет только ``enabled``: негодный url всё равно выключает лайнидж."""
+    """Форс переопределяет только ``enabled``: негодный url всё равно выключает лайнидж.
+
+    :param layout: раскладка атрибутов conf/jars текущего провайдера (параметризована).
+    :param spark_operator: фикстура, подменяющая распознавание ``SparkSubmitOperator`` дублём текущей раскладки.
+    :param variable: фикстура, подменяющая чтение Variable ``openlineage_config``.
+    :param caplog: фикстура pytest для перехвата записей лога.
+    :return: None.
+    """
     variable(
         raw=json.dumps(
             {
@@ -1269,7 +1685,10 @@ def test_force_does_not_bypass_config_validation(
 
 
 def test_listener_constant_is_gone() -> None:
-    """Инвариант 12: класс listener'а не хардкодится в политике."""
+    """Инвариант 12: класс listener'а не хардкодится в политике.
+
+    :return: None.
+    """
     assert not hasattr(ol_policy, "LISTENER")
 
 
@@ -1308,7 +1727,13 @@ class NotSparkOperator:
 def test_non_spark_task_is_left_alone(
     spark_operator: type, jar_ok: list[tuple[str, str]], caplog: pytest.LogCaptureFixture
 ) -> None:
-    """Не наша таска: тихий return без warning'а."""
+    """Не наша таска: тихий return без warning'а.
+
+    :param spark_operator: фикстура, подменяющая распознавание ``SparkSubmitOperator`` дублём текущей раскладки.
+    :param jar_ok: фикстура, подменяющая зонд успешным ответом; список вызовов зонда.
+    :param caplog: фикстура pytest для перехвата записей лога.
+    :return: None.
+    """
     task = NotSparkOperator()
     before = dict(vars(task))
 
@@ -1321,7 +1746,13 @@ def test_non_spark_task_is_left_alone(
 def test_mapped_task_warns(
     spark_operator: type, jar_ok: list[tuple[str, str]], caplog: pytest.LogCaptureFixture
 ) -> None:
-    """Динамический маппинг не поддерживается — но и не пропускается молча."""
+    """Динамический маппинг не поддерживается — но и не пропускается молча.
+
+    :param spark_operator: фикстура, подменяющая распознавание ``SparkSubmitOperator`` дублём текущей раскладки.
+    :param jar_ok: фикстура, подменяющая зонд успешным ответом; список вызовов зонда.
+    :param caplog: фикстура pytest для перехвата записей лога.
+    :return: None.
+    """
 
     class Mapped:
         """Дубль ``MappedOperator``: Spark-овая по ``operator_class``, но не экземпляр."""
@@ -1348,7 +1779,12 @@ def test_mapped_task_warns(
 
 
 def test_spark_task_is_injected_through_apply_policy(layout: SimpleNamespace, spark_operator: type) -> None:
-    """Гейт пропускает экземпляр оператора к дозаписи колбэка."""
+    """Гейт пропускает экземпляр оператора к дозаписи колбэка.
+
+    :param layout: раскладка атрибутов conf/jars текущего провайдера (параметризована).
+    :param spark_operator: фикстура, подменяющая распознавание ``SparkSubmitOperator`` дублём текущей раскладки.
+    :return: None.
+    """
     task = make_task(layout)
 
     ol_policy.apply_policy(task)
@@ -1357,7 +1793,12 @@ def test_spark_task_is_injected_through_apply_policy(layout: SimpleNamespace, sp
 
 
 def test_policy_survives_missing_provider(layout: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Провайдера нет — политике нечего делать, и она об этом не падает."""
+    """Провайдера нет — политике нечего делать, и она об этом не падает.
+
+    :param layout: раскладка атрибутов conf/jars текущего провайдера (параметризована).
+    :param monkeypatch: фикстура подмены атрибутов и окружения.
+    :return: None.
+    """
     monkeypatch.setattr(ol_policy.operator, "_spark_submit_operator", lambda: None)
 
     ol_policy.apply_policy(make_task(layout))
@@ -1383,6 +1824,12 @@ def test_policy_never_raises(
     Сеть и переменная окружения больше не участвуют в парсе, поэтому «мусор»
     здесь — это только ``params`` и отсутствующий DAG. Там, где ни один гейт
     не блокирует таску, инжекция штатно проходит — это не считается сбоем.
+
+    :param layout: раскладка атрибутов conf/jars текущего провайдера (параметризована).
+    :param spark_operator: фикстура, подменяющая распознавание ``SparkSubmitOperator`` дублём текущей раскладки.
+    :param params: значение ``params`` таски (параметризовано).
+    :param drop_dag: убрать ли DAG у таски перед вызовом политики (параметризовано).
+    :return: None.
     """
     task = make_task(layout, params=params, conf={"spark.app.name": "demo"})
     if drop_dag:
@@ -1398,7 +1845,12 @@ def test_policy_never_raises(
 def test_policy_survives_task_without_readable_ids(
     spark_operator: type, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """Даже нечитаемые dag_id/task_id не превращают warning в исключение."""
+    """Даже нечитаемые dag_id/task_id не превращают warning в исключение.
+
+    :param spark_operator: фикстура, подменяющая распознавание ``SparkSubmitOperator`` дублём текущей раскладки.
+    :param caplog: фикстура pytest для перехвата записей лога.
+    :return: None.
+    """
 
     class Exploding:
         """Spark-овая по ``operator_class`` таска, чьи идентификаторы бросают."""
@@ -1432,7 +1884,14 @@ def test_policy_survives_task_without_readable_ids(
 def test_unexpected_error_is_swallowed_and_logged(
     layout: SimpleNamespace, spark_operator: type, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """Непредвиденная ошибка гасится и попадает в лог, а не роняет импорт файла."""
+    """Непредвиденная ошибка гасится и попадает в лог, а не роняет импорт файла.
+
+    :param layout: раскладка атрибутов conf/jars текущего провайдера (параметризована).
+    :param spark_operator: фикстура, подменяющая распознавание ``SparkSubmitOperator`` дублём текущей раскладки.
+    :param monkeypatch: фикстура подмены атрибутов и окружения.
+    :param caplog: фикстура pytest для перехвата записей лога.
+    :return: None.
+    """
 
     def _boom(task: object) -> None:
         raise RuntimeError("неожиданно")
@@ -1450,7 +1909,11 @@ def test_unexpected_error_is_swallowed_and_logged(
 
 
 def test_passthrough_survives_missing_class(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Отсутствие ``AirflowClusterPolicySkipDag`` не обнуляет весь кортеж."""
+    """Отсутствие ``AirflowClusterPolicySkipDag`` не обнуляет весь кортеж.
+
+    :param monkeypatch: фикстура подмены атрибутов и окружения.
+    :return: None.
+    """
     created = install_airflow_exceptions(monkeypatch, ("AirflowTaskTimeout", "AirflowClusterPolicyViolation"))
 
     passthrough = ol_policy.passthrough_exceptions()
@@ -1459,7 +1922,11 @@ def test_passthrough_survives_missing_class(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 def test_passthrough_is_empty_without_airflow(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Airflow недоступен — кортеж пуст, и это легально."""
+    """Airflow недоступен — кортеж пуст, и это легально.
+
+    :param monkeypatch: фикстура подмены атрибутов и окружения.
+    :return: None.
+    """
     monkeypatch.setitem(sys.modules, "airflow.exceptions", None)
 
     assert ol_policy.passthrough_exceptions() == ()
@@ -1469,7 +1936,14 @@ def test_passthrough_is_empty_without_airflow(monkeypatch: pytest.MonkeyPatch) -
 def test_passthrough_exceptions_are_reraised(
     layout: SimpleNamespace, spark_operator: type, monkeypatch: pytest.MonkeyPatch, name: str
 ) -> None:
-    """Чужой механизм таймаута и чужое решение пропустить DAG политика не гасит."""
+    """Чужой механизм таймаута и чужое решение пропустить DAG политика не гасит.
+
+    :param layout: раскладка атрибутов conf/jars текущего провайдера (параметризована).
+    :param spark_operator: фикстура, подменяющая распознавание ``SparkSubmitOperator`` дублём текущей раскладки.
+    :param monkeypatch: фикстура подмены атрибутов и окружения.
+    :param name: имя класса исключения Airflow (параметризовано).
+    :return: None.
+    """
     created = install_airflow_exceptions(
         monkeypatch,
         ("AirflowTaskTimeout", "AirflowClusterPolicyViolation", "AirflowClusterPolicySkipDag"),
@@ -1486,7 +1960,10 @@ def test_passthrough_exceptions_are_reraised(
 
 
 def test_module_imports_without_airflow() -> None:
-    """Модуль политики импортируется без Airflow: он не нужен ему на уровне модуля."""
+    """Модуль политики импортируется без Airflow: он не нужен ему на уровне модуля.
+
+    :return: None.
+    """
     module = importlib.reload(ol_policy)
 
     assert callable(module.ol_execute_callback)
@@ -1503,7 +1980,14 @@ def test_parse_never_touches_metastore(
     monkeypatch: pytest.MonkeyPatch,
     jar_ok: list[tuple[str, str]],
 ) -> None:
-    """Ни ``Variable.get``, ни ``BaseHook.get_connection`` на этапе парсинга."""
+    """Ни ``Variable.get``, ни ``BaseHook.get_connection`` на этапе парсинга.
+
+    :param layout: раскладка атрибутов conf/jars текущего провайдера (параметризована).
+    :param spark_operator: фикстура, подменяющая распознавание ``SparkSubmitOperator`` дублём текущей раскладки.
+    :param monkeypatch: фикстура подмены атрибутов и окружения.
+    :param jar_ok: фикстура, подменяющая зонд успешным ответом; список вызовов зонда.
+    :return: None.
+    """
 
     class _Forbidden:
         """Дубль, который валит тест при любом обращении."""
@@ -1562,7 +2046,10 @@ SEEDED_VARIABLE = json.dumps({
 
 
 def test_seeded_value_parses_back_to_dict() -> None:
-    """Значение сидинга — сырая строка JSON: обратный разбор даёт объект."""
+    """Значение сидинга — сырая строка JSON: обратный разбор даёт объект.
+
+    :return: None.
+    """
     assert isinstance(json.loads(SEEDED_VARIABLE), dict)
 
 
@@ -1571,6 +2058,9 @@ def test_seeded_value_is_accepted_by_the_policy(variable: Callable[..., SimpleNa
 
     Ровно на этом рассогласовании (сидинг нового формата против кода старого)
     стенд после рестарта попадал в ветку «конфиг негоден — лайниджа нет».
+
+    :param variable: фикстура, подменяющая чтение Variable ``openlineage_config``.
+    :return: None.
     """
     variable(raw=SEEDED_VARIABLE)
 
@@ -1579,7 +2069,10 @@ def test_seeded_value_is_accepted_by_the_policy(variable: Callable[..., SimpleNa
 
 
 def test_double_encoded_value_is_not_an_object() -> None:
-    """Регрессия на ``--json``: повторная сериализация даёт строку, а не объект."""
+    """Регрессия на ``--json``: повторная сериализация даёт строку, а не объект.
+
+    :return: None.
+    """
     seeded = json.dumps({"enabled": True, "url": "http://marquez:5000"})
     double_encoded = json.dumps(seeded, indent=2)
 
@@ -1592,39 +2085,58 @@ def test_double_encoded_value_is_not_an_object() -> None:
 
 
 def test_merge_listeners_dag_first_then_our() -> None:
-    """DAG-listener первым, OL-listener последним, порядок CSV сохранён."""
+    """DAG-listener первым, OL-listener последним, порядок CSV сохранён.
+
+    :return: None.
+    """
     assert ol_policy.merge_csv("com.example.A,com.example.B", "io.ol.L") == "com.example.A,com.example.B,io.ol.L"
 
 
 def test_merge_listeners_dedups_existing_ol() -> None:
-    """Если OL-listener уже в DAG-CSV — дедуп, не дублируется."""
+    """Если OL-listener уже в DAG-CSV — дедуп, не дублируется.
+
+    :return: None.
+    """
     assert ol_policy.merge_csv("com.example.A,io.ol.L", "io.ol.L") == "com.example.A,io.ol.L"
 
 
 def test_merge_listeners_only_dag() -> None:
-    """Только DAG — возвращаем DAG как есть."""
+    """Только DAG — возвращаем DAG как есть.
+
+    :return: None.
+    """
     assert ol_policy.merge_csv("com.example.A", "") == "com.example.A"
 
 
 def test_merge_listeners_only_our() -> None:
-    """Только OL — возвращаем OL."""
+    """Только OL — возвращаем OL.
+
+    :return: None.
+    """
     assert ol_policy.merge_csv("", "io.ol.L") == "io.ol.L"
 
 
 def test_merge_listeners_both_empty() -> None:
-    """Пусто и там, и там — пустая строка."""
+    """Пусто и там, и там — пустая строка.
+
+    :return: None.
+    """
     assert ol_policy.merge_csv("", "") == ""
 
 
 @pytest.mark.parametrize("templated", ["{{ params.listener }}", "{% if x %}A,B{% endif %}"])
 def test_merge_listeners_does_not_split_jinja(templated: str) -> None:
-    """Jinja-выражение не режется по запятой."""
+    """Jinja-выражение не режется по запятой.
+
+    :param templated: значение с Jinja-разметкой (параметризовано).
+    :return: None.
+    """
     assert ol_policy.merge_csv(templated, "io.ol.L") == f"{templated},io.ol.L"
     assert ol_policy.merge_csv("", templated) == templated
 
 
 # ---------------------------------------------------------------------------
-# Различимость причин отказа Variable (Task 10)
+# Различимость причин отказа Variable
 # ---------------------------------------------------------------------------
 
 
@@ -1634,7 +2146,14 @@ def test_failure_reasons_are_pairwise_distinct(
     variable: Callable[..., SimpleNamespace],
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Каждая причина отказа звучит в логе по-своему — иначе расследование слепое."""
+    """Каждая причина отказа звучит в логе по-своему — иначе расследование слепое.
+
+    :param layout: раскладка атрибутов conf/jars текущего провайдера (параметризована).
+    :param spark_operator: фикстура, подменяющая распознавание ``SparkSubmitOperator`` дублём текущей раскладки.
+    :param variable: фикстура, подменяющая чтение Variable ``openlineage_config``.
+    :param caplog: фикстура pytest для перехвата записей лога.
+    :return: None.
+    """
     scenarios: dict[str, object] = {
         "no-var": None,
         "bad-json": "{",
@@ -1655,7 +2174,7 @@ def test_failure_reasons_are_pairwise_distinct(
 
 
 # ---------------------------------------------------------------------------
-# Колбэк-фаза: ol_execute_callback / _inject / _write (Task 4)
+# Колбэк-фаза: ol_execute_callback / _inject / _write
 # ---------------------------------------------------------------------------
 
 VALID_VARIABLE = json.dumps({
@@ -1684,7 +2203,14 @@ def test_callback_injects_all_keys_on_success(
     variable: Callable[..., SimpleNamespace],
     jar_ok: list[tuple[str, str]],
 ) -> None:
-    """Успех: пять ключей conf + jar в атрибуте jars, DAG-значения смерджены."""
+    """Успех: пять ключей conf + jar в атрибуте jars, DAG-значения смерджены.
+
+    :param layout: раскладка атрибутов conf/jars текущего провайдера (параметризована).
+    :param spark_operator: фикстура, подменяющая распознавание ``SparkSubmitOperator`` дублём текущей раскладки.
+    :param variable: фикстура, подменяющая чтение Variable ``openlineage_config``.
+    :param jar_ok: фикстура, подменяющая зонд успешным ответом; список вызовов зонда.
+    :return: None.
+    """
     variable(raw=VALID_VARIABLE)
     task = layout.cls(dag=DummyDag(), conf={"spark.executor.cores": "2"}, jars="hdfs:///user/app.jar")
 
@@ -1706,7 +2232,14 @@ def test_callback_merges_dag_listener_and_quotes(
     variable: Callable[..., SimpleNamespace],
     jar_ok: list[tuple[str, str]],
 ) -> None:
-    """DAG-значение с кавычкой (раньше нелитерализуемое) мерджится как обычная строка."""
+    """DAG-значение с кавычкой (раньше нелитерализуемое) мерджится как обычная строка.
+
+    :param layout: раскладка атрибутов conf/jars текущего провайдера (параметризована).
+    :param spark_operator: фикстура, подменяющая распознавание ``SparkSubmitOperator`` дублём текущей раскладки.
+    :param variable: фикстура, подменяющая чтение Variable ``openlineage_config``.
+    :param jar_ok: фикстура, подменяющая зонд успешным ответом; список вызовов зонда.
+    :return: None.
+    """
     variable(raw=VALID_VARIABLE)
     task = layout.cls(dag=DummyDag(), conf={"spark.extraListeners": 'com.x."Weird"Listener'})
 
@@ -1723,7 +2256,14 @@ def test_callback_refusal_leaves_task_untouched(
     variable: Callable[..., SimpleNamespace],
     probe_forbidden: None,
 ) -> None:
-    """enabled=false → conf и jars байт-в-байт как были, зонд не звался."""
+    """enabled=false → conf и jars байт-в-байт как были, зонд не звался.
+
+    :param layout: раскладка атрибутов conf/jars текущего провайдера (параметризована).
+    :param spark_operator: фикстура, подменяющая распознавание ``SparkSubmitOperator`` дублём текущей раскладки.
+    :param variable: фикстура, подменяющая чтение Variable ``openlineage_config``.
+    :param probe_forbidden: фикстура, которая валит тест при любом обращении к зонду.
+    :return: None.
+    """
     variable(raw=json.dumps({"enabled": False, "spark_conf": {}, "openlineage_jar": "hdfs:///x.jar"}))
     conf_before = {"spark.executor.cores": "2"}
     task = layout.cls(dag=DummyDag(), conf=dict(conf_before), jars="a.jar")
@@ -1741,7 +2281,15 @@ def test_callback_refusal_on_missing_jar(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Зонд не подтвердил jar → ни одного ключа не появилось, причина в логе."""
+    """Зонд не подтвердил jar → ни одного ключа не появилось, причина в логе.
+
+    :param layout: раскладка атрибутов conf/jars текущего провайдера (параметризована).
+    :param spark_operator: фикстура, подменяющая распознавание ``SparkSubmitOperator`` дублём текущей раскладки.
+    :param variable: фикстура, подменяющая чтение Variable ``openlineage_config``.
+    :param monkeypatch: фикстура подмены атрибутов и окружения.
+    :param caplog: фикстура pytest для перехвата записей лога.
+    :return: None.
+    """
     variable(raw=VALID_VARIABLE)
     monkeypatch.setattr(ol_policy.probe, "jar_available", lambda jar_uri, path: False)
     task = layout.cls(dag=DummyDag(), conf={})
@@ -1762,8 +2310,15 @@ def test_callback_rejects_bad_url(
 ) -> None:
     """Негодный ``url`` в spark_conf выключает лайнидж целиком: таска остаётся нетронутой.
 
-    Регрессия для параметризованного покрытия ``variable._validate_cfg``'s URL-валидации,
-    ранее закрытого удалённым ``test_macro_rejects_bad_url`` (рендер-фаза до Task 5).
+    Регрессия для параметризованного покрытия URL-валидации ``variable._validate_cfg``,
+    ранее закрытого удалённым ``test_macro_rejects_bad_url`` (макро-эра инъекции).
+
+    :param layout: раскладка атрибутов conf/jars текущего провайдера (параметризована).
+    :param spark_operator: фикстура, подменяющая распознавание ``SparkSubmitOperator`` дублём текущей раскладки.
+    :param variable: фикстура, подменяющая чтение Variable ``openlineage_config``.
+    :param caplog: фикстура pytest для перехвата записей лога.
+    :param bad_url: негодное значение ``url`` (параметризовано).
+    :return: None.
     """
     variable(
         raw=(
@@ -1794,8 +2349,15 @@ def test_callback_rejects_bad_namespace(
 ) -> None:
     """Негодный ``namespace`` в spark_conf выключает лайнидж целиком: таска остаётся нетронутой.
 
-    Регрессия для параметризованного покрытия ``variable._validate_cfg``'s namespace-валидации,
-    ранее закрытого удалённым ``test_macro_rejects_bad_namespace`` (рендер-фаза до Task 5).
+    Регрессия для параметризованного покрытия namespace-валидации ``variable._validate_cfg``,
+    ранее закрытого удалённым ``test_macro_rejects_bad_namespace`` (макро-эра инъекции).
+
+    :param layout: раскладка атрибутов conf/jars текущего провайдера (параметризована).
+    :param spark_operator: фикстура, подменяющая распознавание ``SparkSubmitOperator`` дублём текущей раскладки.
+    :param variable: фикстура, подменяющая чтение Variable ``openlineage_config``.
+    :param caplog: фикстура pytest для перехвата записей лога.
+    :param bad_namespace: негодное значение ``namespace`` (параметризовано).
+    :return: None.
     """
     variable(
         raw=(
@@ -1823,7 +2385,15 @@ def test_callback_url_overrides_dag_value_with_log(
     jar_ok: list[tuple[str, str]],
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """DAG задал transport.url — OL-значение побеждает, конфликт залогирован info."""
+    """DAG задал transport.url — OL-значение побеждает, конфликт залогирован info.
+
+    :param layout: раскладка атрибутов conf/jars текущего провайдера (параметризована).
+    :param spark_operator: фикстура, подменяющая распознавание ``SparkSubmitOperator`` дублём текущей раскладки.
+    :param variable: фикстура, подменяющая чтение Variable ``openlineage_config``.
+    :param jar_ok: фикстура, подменяющая зонд успешным ответом; список вызовов зонда.
+    :param caplog: фикстура pytest для перехвата записей лога.
+    :return: None.
+    """
     caplog.set_level(logging.INFO)
     variable(raw=VALID_VARIABLE)
     task = layout.cls(dag=DummyDag(), conf={"spark.openlineage.transport.url": "http://other:1"})
@@ -1837,14 +2407,23 @@ def test_callback_url_overrides_dag_value_with_log(
 def test_callback_never_raises(
     layout: SimpleNamespace, spark_operator: type, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Внутренний сбой гасится warning'ом, наружу ничего не летит."""
+    """Внутренний сбой гасится warning'ом, наружу ничего не летит.
+
+    :param layout: раскладка атрибутов conf/jars текущего провайдера (параметризована).
+    :param spark_operator: фикстура, подменяющая распознавание ``SparkSubmitOperator`` дублём текущей раскладки.
+    :param monkeypatch: фикстура подмены атрибутов и окружения.
+    :return: None.
+    """
     monkeypatch.setattr(ol_policy.variable, "_cfg", lambda: (_ for _ in ()).throw(RuntimeError("boom")))
 
     _run_callback(layout.cls(dag=DummyDag(), conf={}))  # не бросает
 
 
 def test_callback_ignores_context_without_task() -> None:
-    """Контекст без таски (или чужой объект) — тихий выход."""
+    """Контекст без таски (или чужой объект) — тихий выход.
+
+    :return: None.
+    """
     callback.ol_execute_callback({})
 
 
@@ -1854,7 +2433,14 @@ def test_callback_force_on_beats_disabled(
     variable: Callable[..., SimpleNamespace],
     jar_ok: list[tuple[str, str]],
 ) -> None:
-    """Форс таски включает лайнидж, даже если Variable.enabled=false (аналог test_force_enables_without_enabled_flag)."""
+    """Форс таски включает лайнидж, даже если Variable.enabled=false (см. test_force_enables_without_enabled_flag).
+
+    :param layout: раскладка атрибутов conf/jars текущего провайдера (параметризована).
+    :param spark_operator: фикстура, подменяющая распознавание ``SparkSubmitOperator`` дублём текущей раскладки.
+    :param variable: фикстура, подменяющая чтение Variable ``openlineage_config``.
+    :param jar_ok: фикстура, подменяющая зонд успешным ответом; список вызовов зонда.
+    :return: None.
+    """
     variable(raw=json.dumps({
         "enabled": False,
         "spark_conf": {
@@ -1884,6 +2470,13 @@ def test_callback_config_values_never_reach_the_log(
     с ``jar_uri`` — это допустимо (см. ``probe.py``: "probe-deadline", "probe-error"), а
     вот listener/url/namespace из уже провалидированного ``config`` светиться в warning
     не должны вовсе.
+
+    :param layout: раскладка атрибутов conf/jars текущего провайдера (параметризована).
+    :param spark_operator: фикстура, подменяющая распознавание ``SparkSubmitOperator`` дублём текущей раскладки.
+    :param variable: фикстура, подменяющая чтение Variable ``openlineage_config``.
+    :param monkeypatch: фикстура подмены атрибутов и окружения.
+    :param caplog: фикстура pytest для перехвата записей лога.
+    :return: None.
     """
     variable(raw=json.dumps({
         "enabled": True,

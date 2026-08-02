@@ -1,6 +1,6 @@
 """Чтение и проверка Airflow Variable ``openlineage_config``.
 
-Читается только на рендере, на воркере (почему не на парсе — см. ``parse``). Никогда
+Читается только из колбэка, на воркере (почему не на парсе — см. ``parse``). Никогда
 не бросает: при любой ошибке возвращает None, и лайнидж просто не включается.
 """
 
@@ -51,24 +51,38 @@ def _clean(value: object, *, require_scheme: bool = False) -> str:
     return cleaned
 
 
+def _cfg_with_stamp() -> tuple[float, dict[str, object] | None]:
+    """Конфиг OL из Airflow Variable вместе со штампом мемо, с TTL-мемо на процесс.
+
+    Общая точка правды для ``_cfg`` и ``_validate_cfg``: обеим нужен один и тот же
+    штамп свежести, иначе валидированный конфиг мог бы протухать не в такт с сырым
+    (см. ``_validate_cfg``).
+
+    Колбэк читает конфиг несколько раз за один запуск таски (гейт ``enabled``,
+    затем валидированные значения) — TTL защищает от повторного похода в
+    metastore внутри одного и того же запуска. На исполнителе с переиспользуемыми
+    процессами правка Variable подхватится не позже чем через ``_TTL_SEC``.
+
+    :return: пара (штамп мемо, конфиг); конфиг — словарь с ключами enabled,
+        spark_conf, openlineage_jar, либо None, если его не удалось прочитать
+        или его форма неверна; причина в этом случае уже записана в лог.
+    """
+    global _cfg_memo
+    if _cfg_memo is not None and _now() - _cfg_memo[0] < _TTL_SEC:
+        return _cfg_memo
+    value = _load_cfg()
+    _cfg_memo = (_now(), value)
+    return _cfg_memo
+
+
 def _cfg() -> dict[str, object] | None:
     """Конфиг OL из Airflow Variable, с TTL-мемо на процесс.
-
-    Значение читается тремя вызовами макроса за один рендер, а процесс
-    запуска таски на воркере живёт одну таску — TTL защищает от повторного
-    похода в metastore внутри неё. На исполнителе с переиспользуемыми
-    процессами правка Variable подхватится не позже чем через ``_TTL_SEC``.
 
     :return: разобранный конфиг с ключами enabled, spark_conf, openlineage_jar,
         либо None, если конфиг прочитать не удалось или его форма неверна;
         причина в этом случае уже записана в лог.
     """
-    global _cfg_memo
-    if _cfg_memo is not None and _now() - _cfg_memo[0] < _TTL_SEC:
-        return _cfg_memo[1]
-    value = _load_cfg()
-    _cfg_memo = (_now(), value)
-    return value
+    return _cfg_with_stamp()[1]
 
 
 def _load_cfg() -> dict[str, object] | None:
@@ -116,18 +130,21 @@ def _load_cfg() -> dict[str, object] | None:
 
 
 def _validate_cfg() -> Config | None:
-    """Проверяет годность Variable, с TTL-мемо на процесс: недостающие поля — одним warning'ом.
+    """Проверяет годность Variable, с мемо на процесс: недостающие поля — одним warning'ом.
 
-    TTL тот же, что у ``_cfg``, и завязан на тот же ``_now`` — валидированный
-    конфиг протухает вместе с сырым.
+    Свежесть не считается отдельным TTL, а завязана на мемо ``_cfg``: валидированное
+    значение пересчитывается ровно тогда, когда обновляется сырое, — иначе валидированный
+    конфиг мог бы протухнуть позже сырого и отдавать старые url/namespace/jar ещё
+    до ``_TTL_SEC`` после его перезагрузки.
 
     :return: проверенный конфиг либо None, если он непригоден для включения лайниджа.
     """
     global _validated_memo
-    if _validated_memo is not None and _now() - _validated_memo[0] < _TTL_SEC:
+    stamp, cfg = _cfg_with_stamp()
+    if _validated_memo is not None and _validated_memo[0] == stamp:
         return _validated_memo[1]
-    value = _validate(_cfg())
-    _validated_memo = (_now(), value)
+    value = _validate(cfg)
+    _validated_memo = (stamp, value)
     return value
 
 

@@ -1,7 +1,7 @@
 """Зонд openlineage-spark jar в HDFS: WebHDFS-опрос под дедлайном, мемо по URI.
 
-Единственное место пакета, которое ходит в сеть, и вызывается оно только на рендере
-(почему не на парсе — см. ``parse``).
+Единственное место пакета, которое ходит в сеть, и вызывается оно только из колбэка
+на воркере (почему не на парсе — см. ``parse``).
 
 Аутентификация — только SPNEGO/Negotiate по challenge 401; делегационные токены не поддерживаются.
 """
@@ -28,9 +28,16 @@ _ProbeOutcome = Literal["found", "absent", "down"]
 
 # Ограничители зонда: дедлайн на весь перебор, таймаут одного эндпоинта, TTL мемо.
 # Модульные, потому что тесты подменяют их monkeypatch'ем.
-# Дедлайн покрывает два прохода по HA-паре NameNode: 2 прохода × 2 эндпоинта ×
-# ENDPOINT_TIMEOUT_SEC + пауза ретрая (2*2*2.0 + 0.5 = 8.5 с), с запасом.
-_PROBE_DEADLINE_SEC = 10.0
+# Арифметика ниже покрывает только HTTP-видимую часть: два прохода по HA-паре
+# NameNode, и на 401 каждый эндпоинт стоит двух запросов (без токена + с
+# SPNEGO-токеном), оба под ENDPOINT_TIMEOUT_SEC:
+# 2 прохода × 2 эндпоинта × 2 запроса × ENDPOINT_TIMEOUT_SEC + пауза ретрая
+# (2*2*2*2.0 + 0.5 = 16.5 с), с запасом. Получение самого SPNEGO-токена
+# (обращение к KDC/кэшу тикетов в _spnego_header) в эту сумму не входит — его
+# стоимость не нормирована ENDPOINT_TIMEOUT_SEC. Фактический потолок в любом
+# случае задаёт не эта арифметика, а ``worker.join(_PROBE_DEADLINE_SEC)`` в
+# jar_available: поток обрежется по нему, чем бы он ни был занят.
+_PROBE_DEADLINE_SEC = 17.0
 ENDPOINT_TIMEOUT_SEC = 2.0
 _MEMO_TTL_SEC = 300.0
 _MEMO_ERROR_TTL_SEC = 30.0
@@ -42,9 +49,12 @@ _now = utils.now
 resolve_webhdfs_urls = hadoop_conf.resolve_webhdfs_urls
 _sleep = time.sleep
 
-# Мемо зонда: jar_uri -> (available, timestamp, ttl). Ошибочные исходы живут
-# _MEMO_ERROR_TTL_SEC, авторитетные — _MEMO_TTL_SEC: восстановление кластера
-# подхватывается быстро, а поток тасок не долбит мёртвый кластер.
+# Мемо зонда: jar_uri -> (available, timestamp, ttl). Мемо процессное: при
+# LocalExecutor и стандартном task_runner'е Airflow форкает свежий процесс под
+# каждую TaskInstance, так что это мемо не переживает таску и не демпфирует
+# поток тасок к недоступному кластеру между задачами — оно дедуплицирует
+# только повторные вызовы jar_available внутри одного и того же процесса.
+# Ошибочные исходы живут _MEMO_ERROR_TTL_SEC, авторитетные — _MEMO_TTL_SEC.
 _jar_memo: dict[str, tuple[bool, float, float]] = {}
 
 
@@ -107,7 +117,7 @@ def _query_with_auth(endpoint: str, url: str) -> _Outcome:
 
     :param endpoint: адрес эндпоинта — источник hostname для токена.
     :param url: полный URL первоначального запроса.
-    :return: "found", "absent" либо "error".
+    :return: "found", "absent", "standby" либо "error".
     """
     header = _spnego_header(endpoint)
     if header is None:
@@ -116,11 +126,16 @@ def _query_with_auth(endpoint: str, url: str) -> _Outcome:
             "OpenLineage не включён: WebHDFS требует Kerberos (401), SPNEGO-токен получить не удалось",
         )
         return "error"
+    request = Request(url, headers={"Authorization": header})
     try:
-        with urlopen(Request(url, headers={"Authorization": header}), timeout=ENDPOINT_TIMEOUT_SEC) as response:  # noqa: S310
+        with urlopen(request, timeout=ENDPOINT_TIMEOUT_SEC) as response:  # noqa: S310 URL строим мы сами
             return "found" if response.status == 200 else "error"
     except HTTPError as error:
-        return "absent" if error.code == 404 else "error"
+        if error.code == 404:
+            return "absent"
+        if error.code == 403 and _is_standby(error):
+            return "standby"
+        return "error"
     except Exception:
         return "error"
 
@@ -198,14 +213,16 @@ def jar_available(jar_uri: str, path: str) -> bool:
     """Лежит ли openlineage-spark jar в HDFS.
 
     Весь перебор, включая резолв эндпоинтов, уходит в демон-поток: таймаут
-    сокета не покрывает ``getaddrinfo``, а зависший вызов стопорил бы рендер
-    таски на воркере. Результат брошенного потока отбрасывается — мемо пишет
+    сокета не покрывает ``getaddrinfo``, а зависший вызов стопорил бы колбэк
+    на воркере. Результат брошенного потока отбрасывается — мемо пишет
     ожидающая сторона, иначе две таски одного файла получили бы разные ответы.
 
     Мемо по ``jar_uri`` с TTL, зависящим от исхода: авторитетные ответы
     (``found``/``absent``) живут ``_MEMO_TTL_SEC``, а любой неавторитетный исход
-    (дедлайн, исключение, ``down``) — ``_MEMO_ERROR_TTL_SEC``: восстановление
-    кластера подхватывается быстро, а поток тасок не долбит мёртвый кластер.
+    (дедлайн, исключение, ``down``) — ``_MEMO_ERROR_TTL_SEC``. Мемо процессное
+    и таску не переживает (см. ``_jar_memo``) — короткий TTL ошибок ускоряет
+    подхват восстановления кластера при повторном обращении в том же процессе,
+    а не демпфирует поток тасок между процессами.
     Поток, доехавший после дедлайна, мемо не переписывает — поздняя запись
     потеряла бы актуальность.
 

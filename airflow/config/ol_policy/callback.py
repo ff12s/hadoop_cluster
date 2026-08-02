@@ -99,10 +99,13 @@ def _write(task: object, attrs: operator.OperatorAttrs, config: variable.Config)
     """
     conf_obj = getattr(task, attrs.conf)
     cur_conf: dict[str, object] = dict(conf_obj) if isinstance(conf_obj, dict) else {}
-    for key, ours in (
+    overrides = (
+        ("spark.openlineage.transport.type", "http"),
         ("spark.openlineage.transport.url", config.url),
         ("spark.openlineage.namespace", config.namespace),
-    ):
+        ("spark.openlineage.columnLineage.datasetLineageEnabled", "true"),
+    )
+    for key, ours in overrides:
         dag_value = cur_conf.get(key)
         if isinstance(dag_value, str) and dag_value and dag_value != ours:
             log.info("ol_policy: %s в DAG-conf=%s переопределяется OL-значением=%s", key, dag_value, ours)
@@ -112,8 +115,5 @@ def _write(task: object, attrs: operator.OperatorAttrs, config: variable.Config)
     setattr(task, attrs.conf, {
         **cur_conf,
         "spark.extraListeners": merged_listeners,
-        "spark.openlineage.transport.type": "http",
-        "spark.openlineage.transport.url": config.url,
-        "spark.openlineage.namespace": config.namespace,
-        "spark.openlineage.columnLineage.datasetLineageEnabled": "true",
+        **dict(overrides),
     })
