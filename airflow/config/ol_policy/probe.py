@@ -1,10 +1,4 @@
-"""Зонд openlineage-spark jar в HDFS: WebHDFS-опрос под дедлайном.
-
-Единственное место пакета, которое ходит в сеть, и вызывается оно только из колбэка
-на воркере (почему не на парсе — см. ``parse``).
-
-Аутентификация — только SPNEGO/Negotiate по challenge 401; делегационные токены не поддерживаются.
-"""
+"""Зонд наличия openlineage-spark jar в HDFS через WebHDFS."""
 
 from __future__ import annotations
 
@@ -20,42 +14,23 @@ from urllib.request import Request, urlopen
 from . import hadoop_conf, handlers
 from .logger import warn_once
 
-# Исход опроса одного эндпоинта WebHDFS.
-_Outcome = Literal["found", "absent", "standby", "error"]
-
-# Исход целого зонда: down — кластер не дал авторитетного ответа ни на одном проходе.
+_EndpointOutcome = Literal["found", "absent", "standby", "error"]
 _ProbeOutcome = Literal["found", "absent", "down"]
 
-# Ограничители зонда: дедлайн на весь перебор, таймаут одного эндпоинта.
-# Модульные, потому что тесты подменяют их monkeypatch'ем.
-# Арифметика ниже покрывает только HTTP-видимую часть: два прохода по HA-паре
-# NameNode, и на 401 каждый эндпоинт стоит двух запросов (без токена + с
-# SPNEGO-токеном), оба под ENDPOINT_TIMEOUT_SEC:
-# 2 прохода × 2 эндпоинта × 2 запроса × ENDPOINT_TIMEOUT_SEC + пауза ретрая
-# (2*2*2*2.0 + 0.5 = 16.5 с), с запасом. Получение самого SPNEGO-токена
-# (обращение к KDC/кэшу тикетов в _spnego_header) в эту сумму не входит — его
-# стоимость не нормирована ENDPOINT_TIMEOUT_SEC. Фактический потолок в любом
-# случае задаёт не эта арифметика, а ``worker.join(_PROBE_DEADLINE_SEC)`` в
-# jar_available: поток обрежется по нему, чем бы он ни был занят.
 _PROBE_DEADLINE_SEC = 17.0
 ENDPOINT_TIMEOUT_SEC = 2.0
 _RETRY_PAUSE_SEC = 0.5
 
-# Ре-экспорты ради тестов: ``monkeypatch.setattr(probe, ...)`` должен попадать в
-# символ, который читает этот модуль, а не в модуль-владелец.
+# Реэкспорт ради monkeypatch: тесты подменяют символ, который читает этот модуль.
 resolve_webhdfs_urls = hadoop_conf.resolve_webhdfs_urls
 _sleep = time.sleep
 
 
 def jar_path(jar_uri: str) -> str | None:
-    """Путь внутри HDFS из значения поля ``openlineage_jar``.
-
-    Схема обязательна: значение без схемы ``spark-submit`` трактует в ``--jars``
-    как локальный файл сабмит-хоста, и джоба падает на локализации. Authority
-    (RPC-хост и RPC-порт) игнорируется — эндпоинты WebHDFS даёт резолвер.
+    """Возвращает абсолютный путь внутри HDFS из значения поля ``openlineage_jar``.
 
     :param jar_uri: значение поля ``openlineage_jar``.
-    :return: абсолютный путь для WebHDFS либо None, если значение негодно.
+    :return: абсолютный путь для WebHDFS либо None, если значение без схемы или без пути.
     """
     parsed = urlparse(jar_uri.strip())
     if not parsed.scheme or not parsed.path:
@@ -78,14 +53,10 @@ def _is_standby(error: HTTPError) -> bool:
 
 
 def _spnego_header(endpoint: str) -> str | None:
-    """SPNEGO-заголовок Authorization для эндпоинта либо None.
-
-    Ленивый импорт pyspnego: пакет и его kerberos-бэкенд есть не во всех средах,
-    а тесты бегут вовсе без него. Любая ошибка (нет модуля, нет тикета, KDC
-    недоступен) — это «токена нет», решает вызывающий.
+    """Строит SPNEGO-заголовок Authorization для эндпоинта.
 
     :param endpoint: адрес вида ``http://host:port``.
-    :return: строка ``Negotiate <base64>`` либо None.
+    :return: строка ``Negotiate <base64>`` либо None, если токен получить не удалось.
     """
     host = urlparse(endpoint).hostname
     if not host:
@@ -101,7 +72,7 @@ def _spnego_header(endpoint: str) -> str | None:
     return "Negotiate " + base64.b64encode(token).decode("ascii")
 
 
-def _query_with_auth(endpoint: str, url: str) -> _Outcome:
+def _query_with_auth(endpoint: str, url: str) -> _EndpointOutcome:
     """Повторяет запрос зонда с SPNEGO-заголовком после challenge 401.
 
     :param endpoint: адрес эндпоинта — источник hostname для токена.
@@ -129,7 +100,7 @@ def _query_with_auth(endpoint: str, url: str) -> _Outcome:
         return "error"
 
 
-def _query_endpoint(endpoint: str, path: str) -> _Outcome:
+def _query_endpoint(endpoint: str, path: str) -> _EndpointOutcome:
     """Спрашивает один эндпоинт WebHDFS про файл.
 
     :param endpoint: адрес вида ``http://host:port``.
@@ -153,14 +124,10 @@ def _query_endpoint(endpoint: str, path: str) -> _Outcome:
 
 
 def _probe(path: str) -> _ProbeOutcome:
-    """Перебирает эндпоинты WebHDFS, при сплошных отказах — второй проход.
-
-    Ретрай один: транзиентная ошибка сети или сплошные standby на первом
-    проходе не должны выключать лайнидж этой таски. Авторитетные ответы
-    (200/404) терминальны сразу.
+    """Опрашивает эндпоинты WebHDFS, при сплошных неавторитетных ответах — второй проход.
 
     :param path: абсолютный путь jar'а в HDFS.
-    :return: "found", "absent" либо "down" — ни один эндпоинт не ответил.
+    :return: "found", "absent" либо "down" — ни один эндпоинт не ответил авторитетно.
     :raises handlers.NoEndpointsError: резолвер не дал ни одного эндпоинта.
     """
     endpoints = resolve_webhdfs_urls()
@@ -199,14 +166,7 @@ def _probe_worker(path: str, slot: list[_ProbeOutcome | BaseException]) -> None:
 
 
 def jar_available(jar_uri: str, path: str) -> bool:
-    """Лежит ли openlineage-spark jar в HDFS.
-
-    Весь перебор, включая резолв эндпоинтов, уходит в демон-поток: таймаут
-    сокета не покрывает ``getaddrinfo``, а зависший вызов стопорил бы колбэк
-    на воркере. Результат потока, доехавшего после дедлайна, отбрасывается.
-
-    Кэша нет намеренно: Airflow форкает свежий процесс под каждую TaskInstance,
-    а внутри одного запуска колбэка зонд вызывается ровно один раз.
+    """Проверяет наличие openlineage-spark jar в HDFS, прерываясь по дедлайну.
 
     :param jar_uri: значение поля ``openlineage_jar`` — для текстов warning'ов.
     :param path: разобранный путь jar'а для WebHDFS.

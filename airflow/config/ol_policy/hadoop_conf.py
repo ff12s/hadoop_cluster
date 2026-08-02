@@ -1,14 +1,4 @@
-"""Разбор конфигов Hadoop и резолв WebHDFS-эндпоинтов для cluster policy.
-
-Перенос из ``SparkAPI/app/core/hadoop_api``: разбор ``*-site.xml`` с раскрытием
-``${var}`` и резолв адресов NameNode (``HdfsApi._resolve_urls``). Только
-стандартная библиотека: ``defusedxml`` есть не во всех целевых средах, а
-разбираются собственные файлы кластера, смонтированные на чтение.
-
-Кэш разбора по mtime не переносится: конфиги запечены в образ, а процесс, в
-котором работает политика, живёт один парс DAG-файла — инвалидировать нечего.
-Модуль не импортирует Airflow: он же используется тестами без него.
-"""
+"""Разбор конфигов Hadoop и резолв эндпоинтов WebHDFS."""
 
 from __future__ import annotations
 
@@ -32,13 +22,10 @@ def hadoop_conf_dir() -> str:
     return os.environ.get("HADOOP_CONF_DIR") or os.environ.get("YARN_CONF_DIR") or "/etc/hadoop/conf"
 
 
-def _expand(value: str, props: dict[str, str]) -> str:
-    """Раскрывает ``${name}`` по другим свойствам того же файла.
+def _expand_vars(value: str, props: dict[str, str]) -> str:
+    """Раскрывает ссылки ``${name}`` по другим свойствам того же файла.
 
-    Повторяет property-only подстановку ``Configuration.get()``: неизвестная
-    переменная и цикл оставляют плейсхолдер, а не роняют разбор. Формы
-    ``${env.VAR}`` и ``${system.prop}`` не поддерживаются — конфиги кластера их
-    не используют.
+    Неизвестная переменная и цикл оставляют плейсхолдер, а не роняют разбор.
 
     :param value: сырое значение свойства.
     :param props: все свойства файла для подстановки.
@@ -57,10 +44,8 @@ def _expand(value: str, props: dict[str, str]) -> str:
 def parse_hadoop_xml(filename: str) -> dict[str, str]:
     """Разбирает ``*-site.xml`` из каталога конфигов в словарь свойств.
 
-    Свойства без имени или без значения пропускаются.
-
     :param filename: имя файла в ``hadoop_conf_dir()``.
-    :return: свойства файла с раскрытыми ``${var}``.
+    :return: свойства файла с раскрытыми ``${var}``; свойства без имени или значения пропущены.
     :raises OSError: файл недоступен.
     :raises ElementTree.ParseError: файл не является корректным XML.
     """
@@ -71,15 +56,11 @@ def parse_hadoop_xml(filename: str) -> dict[str, str]:
         value = prop.findtext("value")
         if name and value is not None:
             props[name] = value
-    return {name: _expand(value, props) for name, value in props.items()}
+    return {name: _expand_vars(value, props) for name, value in props.items()}
 
 
 def resolve_webhdfs_urls() -> list[str]:
-    """Эндпоинты WebHDFS по конфигам кластера: HA, одиночный адрес либо фолбэк.
-
-    Порядок повторяет оригинал: ``dfs.http.policy`` задаёт схему и ключ адреса,
-    затем HA-список по ``dfs.nameservices``, затем одиночный адрес, затем хост из
-    ``fs.defaultFS`` с портом WebHDFS по умолчанию.
+    """Определяет эндпоинты WebHDFS по конфигам кластера: HA-список, одиночный адрес либо фолбэк.
 
     :return: список адресов вида ``http://host:port`` без завершающего слэша;
         пустой список, если по конфигам эндпоинты определить нельзя.

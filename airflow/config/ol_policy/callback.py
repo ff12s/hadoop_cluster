@@ -1,14 +1,4 @@
-"""Колбэк-фаза: Airflow зовёт ``ol_execute_callback`` на воркере до ``execute()``.
-
-Единственное место, где читается Variable, зондируется jar и пишутся conf/jars.
-Выполняется после рендера шаблонов (значения таски — финальные строки) и до
-``execute()``: SparkSubmitOperator читает conf и jars лениво при построении
-hook'а, поэтому запись отсюда доезжает до команды spark-submit.
-
-Отказ любого гейта оставляет таску байт-в-байт нетронутой. Колбэк не бросает:
-Airflow и сам глотает исключения execute-колбэков, но собственный перехват даёт
-наш формат warning'а и дедупликацию.
-"""
+"""Колбэк-фаза: резолв значений лайниджа и запись conf/jars на воркере до ``execute()``."""
 
 from __future__ import annotations
 
@@ -43,7 +33,7 @@ def ol_execute_callback(context: Mapping[str, object]) -> None:
 
 
 def _inject(task: object) -> None:
-    """Гейты и запись лайниджа; любой отказ — молчаливый (причины пишут сами гейты).
+    """Проверяет гейты лайниджа и пишет его значения в таску.
 
     :param task: execution-копия оператора из контекста.
     :return: None.
@@ -53,18 +43,18 @@ def _inject(task: object) -> None:
         return
     attrs = operator.operator_attrs(task)
     if attrs is None:
-        return  # причина уже названа парс-фазой
+        return
     forced = operator.lineage_forced(task)
     if forced is False:
         log.info("ol_policy: лайнидж выключен форсом DAG-уровня")
         return
-    cfg = variable._cfg()
+    cfg = variable.read_config()
     if cfg is None:
         return
     if forced is not True and cfg.get("enabled") is not True:
         log.info("ol_policy: лайнидж выключен, Variable.enabled=false и форса DAG'а нет")
         return
-    config = variable._validate(cfg)
+    config = variable.validate_config(cfg)
     if config is None:
         return
     path = probe.jar_path(config.jar_uri)
@@ -83,19 +73,11 @@ def _inject(task: object) -> None:
             config.jar_uri,
         )
         return
-    _write(task, attrs, config)
+    _write_lineage(task, attrs, config)
 
 
-def _write(task: object, attrs: operator.OperatorAttrs, config: variable.Config) -> None:
-    """Пишет лайнидж в таску: сначала атрибут jars, затем conf.
-
-    Порядок записи — инвариант: обрыв между setattr'ами оставляет максимум
-    лишний jar без листенера (безопасно), но не листенер без jar'а.
-
-    Строковый ключ ``spark.jars`` из итогового conf удаляется: его элементы
-    уезжают в атрибут jars (``--jars``), а двойное объявление списка полагалось
-    бы на приоритет ``--jars`` у spark-submit. Нестроковое значение (мусор для
-    CSV-мерджа) остаётся в conf как было.
+def _write_lineage(task: object, attrs: operator.OperatorAttrs, config: variable.Config) -> None:
+    """Пишет значения лайниджа в атрибуты jars и conf таски; строковый ``spark.jars`` из conf переезжает в jars.
 
     :param task: execution-копия оператора.
     :param attrs: имена атрибутов conf/jars текущей раскладки.
@@ -115,6 +97,7 @@ def _write(task: object, attrs: operator.OperatorAttrs, config: variable.Config)
         if isinstance(dag_value, str) and dag_value and dag_value != ours:
             log.info("ol_policy: %s в DAG-conf=%s переопределяется OL-значением=%s", key, dag_value, ours)
     dag_conf_jars = cur_conf.pop("spark.jars", None) if isinstance(cur_conf.get("spark.jars"), str) else None
+    # jars пишется раньше conf: обрыв между setattr'ами оставит лишний jar, но не листенер без jar'а.
     setattr(task, attrs.jars, utils.merge_csv(getattr(task, attrs.jars), dag_conf_jars, config.jar_uri))
     merged_listeners = utils.merge_csv(cur_conf.get("spark.extraListeners"), config.listener)
     log.info("ol_policy: spark.extraListeners=%s", merged_listeners)

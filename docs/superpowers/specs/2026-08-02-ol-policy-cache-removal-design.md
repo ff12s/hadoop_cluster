@@ -41,13 +41,13 @@
 
 ### 1. `variable.py`: без мемо
 
-Остаются `VARIABLE`, `Config`, `_clean`, `_cfg` (бывший `_load_cfg` — читает и разбирает,
-никогда не бросает), `_validate(cfg)`. Удаляются `_TTL_SEC`, `_now`, оба мемо, `_cfg_with_stamp`,
+Остаются `VARIABLE`, `Config`, `_clean`, `read_config` (бывший `_load_cfg` — читает и разбирает,
+никогда не бросает), `validate_config(cfg)`. Удаляются `_TTL_SEC`, `_now`, оба мемо, `_cfg_with_stamp`,
 `_validate_cfg`, `reset()`.
 
 ### 2. `callback.py`: одно чтение, передача вниз
 
-`_inject`: `cfg = variable._cfg()` → гейт `enabled` → `config = variable._validate(cfg)`.
+`_inject`: `cfg = variable.read_config()` → гейт `enabled` → `config = variable.validate_config(cfg)`.
 Порядок гейтов не меняется.
 
 ### 3. `probe.py`: зонд без мемо
@@ -68,7 +68,7 @@ Warning'и и их ключи не меняются.
 
 Больше никем не используется.
 
-### 7. `callback._write`: `pop("spark.jars")`
+### 7. `callback._write_lineage`: `pop("spark.jars")`
 
 Элементы `conf["spark.jars"]` уезжают в атрибут jars (`--jars`), сам ключ удаляется из
 записываемого conf. Раньше список объявлялся дважды и работал только благодаря приоритету
@@ -92,12 +92,12 @@ Warning'и и их ключи не меняются.
 - `test_conf_jars_are_taken_into_jars_and_left_intact` → `test_conf_jars_move_into_jars_attribute`:
   ключ из conf удалён.
 - `test_reset_state_calls_module_resets` → `test_reset_state_resets_warn_dedup`.
-- Вызовы `variable._validate_cfg()` в тестах → `variable._validate(variable._cfg())`.
+- Вызовы `variable._validate_cfg()` в тестах → `variable.validate_config(variable.read_config())`.
 
 ## Смоук и документация
 
 - `tests/test-airflow.bat` шаг 11: ассерт `conf['spark.jars'] == 'other.jar'` →
-  `'spark.jars' not in conf`; шаг 13: `_validate(_cfg())` вместо `reset_state()+_validate_cfg()`.
+  `'spark.jars' not in conf`; шаг 13: `validate_config(read_config())` вместо `reset_state()+_validate_cfg()`.
 - README и CHANGELOG «Известные ограничения»: пункт про процессные мемо → «кэша нет,
   каждая таска платит полный зонд до 17 с при недоступном WebHDFS».
 - CHANGELOG (Unreleased): записи, описывавшие введение TTL-мемо, обновлены до итогового

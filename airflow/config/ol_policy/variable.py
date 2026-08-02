@@ -1,12 +1,4 @@
-"""Чтение и проверка Airflow Variable ``openlineage_config``.
-
-Читается только из колбэка, на воркере (почему не на парсе — см. ``parse``). Никогда
-не бросает: при любой ошибке возвращает None, и лайнидж просто не включается.
-
-Кэша здесь нет намеренно: Airflow форкает свежий процесс под каждую TaskInstance,
-а за один запуск колбэка Variable читается ровно один раз — ``callback`` передаёт
-прочитанное значение в ``_validate`` сам.
-"""
+"""Чтение и проверка Airflow Variable ``openlineage_config``."""
 
 from __future__ import annotations
 
@@ -42,12 +34,11 @@ def _clean(value: object, *, require_scheme: bool = False) -> str:
     return cleaned
 
 
-def _cfg() -> dict[str, object] | None:
-    """Читает и разбирает Variable ``openlineage_config``. Никогда не бросает.
+def read_config() -> dict[str, object] | None:
+    """Читает Variable ``openlineage_config`` и разбирает её JSON.
 
-    :return: разобранный конфиг с ключами enabled, spark_conf, openlineage_jar,
-        либо None, если конфиг прочитать не удалось или его форма неверна;
-        причина в этом случае уже записана в лог.
+    :return: конфиг с ключами enabled, spark_conf, openlineage_jar; None, если прочитать
+        не удалось или форма неверна — причина записана в лог.
     """
     try:
         from airflow.models import Variable
@@ -69,8 +60,6 @@ def _cfg() -> dict[str, object] | None:
         return None
     if "auth" in parsed:
         warn_once(("auth",), "OpenLineage: ключ 'auth' в Variable не поддерживается и не подставляется")
-    # Форма проверяется здесь, содержимое полей — в _validate: тут решается,
-    # тот ли это документ вообще, там — годится ли он для включения лайниджа.
     shape_ok = (
         isinstance(parsed.get("enabled"), bool)
         and isinstance(parsed.get("spark_conf"), dict)
@@ -86,10 +75,10 @@ def _cfg() -> dict[str, object] | None:
     return parsed
 
 
-def _validate(cfg: dict[str, object] | None) -> Config | None:
-    """Проверяет годность разобранного конфига: недостающие поля — одним warning'ом.
+def validate_config(cfg: dict[str, object] | None) -> Config | None:
+    """Проверяет годность разобранного конфига, сообщая о недостающих полях одним warning'ом.
 
-    :param cfg: конфиг, разобранный ``_cfg``, либо None.
+    :param cfg: конфиг, разобранный ``read_config``, либо None.
     :return: проверенный конфиг либо None, если он непригоден для включения лайниджа.
     """
     if cfg is None:

@@ -1,26 +1,8 @@
-"""Cluster policy стенда: инъекция OpenLineage в Spark-таски Airflow.
-
-OL-листенер вынесен из общего ``spark-defaults.conf`` (он ломал интерактивный
-``spark-shell``), поэтому Airflow навешивает лайнидж своим ``SparkSubmitOperator``
-сам — без правок в DAG'ах.
-
-Пакет разложен по фазам жизненного цикла политики: ``parse`` на разборе DAG-файла
-дописывает колбэк лайниджа в ``on_execute_callback`` таски, ``callback`` резолвит
-значения и пишет conf/jars на воркере перед ``execute()``, ``variable`` читает
-Airflow Variable, ``probe`` ходит в HDFS, ``operator`` знает про две раскладки
-провайдера. Здесь остаётся только точка входа и общий сброс состояния.
-
-Политика ничего не роняет: любая ошибка гасится и превращается в «лайниджа нет».
-Ни один модуль пакета не импортирует Airflow на уровне модуля — импорт идёт внутри
-функций, поэтому набор тестов запускается без установленного Airflow.
-"""
+"""Точка входа cluster policy: инъекция OpenLineage в Spark-таски Airflow."""
 
 from __future__ import annotations
 
-# Подмодули импортируются целиком ради путей ``ol_policy.<module>``: подменять
-# поведение нужно у модуля-владельца, потому что вызов внутри него идёт через его
-# собственный глобал. Символьные реэкспорты ниже — read-only алиасы.
-from . import callback, logger, operator, parse, probe, utils, variable  # noqa: F401
+from . import callback, logger, operator, parse, probe, utils, variable  # noqa: F401 пути для monkeypatch
 from .callback import ol_execute_callback
 from .operator import lineage_forced, operator_attrs, passthrough_exceptions
 from .parse import inject_openlineage
@@ -41,11 +23,7 @@ __all__ = [
 
 
 def apply_policy(task: object) -> None:
-    """Точка входа cluster policy: гейт типа таски и общий перехват ошибок.
-
-    Любая ошибка политики гасится: исключение отсюда роняет импорт всего
-    DAG-файла, то есть баг выключил бы все DAG'и разом. Чужой механизм таймаута
-    и чужое решение пропустить DAG пробрасываются наружу.
+    """Точка входа cluster policy: пропускает Spark-таски к инъекции, гася свои ошибки.
 
     :param task: любая таска Airflow; мутируется на месте на этапе парсинга.
     :return: None.
@@ -79,17 +57,11 @@ def apply_policy(task: object) -> None:
 
 
 def reset_state() -> None:
-    """Сбрасывает всё модульное состояние политики.
-
-    Единственное модульное состояние пакета — дедупликация warning'ов; кэшей
-    конфига и зонда больше нет (процесс живёт одну таску либо один парс).
-    Зовётся фикстурой ``_reset_policy_state`` (conftest.py) до и после каждого
-    теста: дедупликация переживает границу теста и без сброса смешала бы результаты.
+    """Сбрасывает модульное состояние политики.
 
     :return: None.
     """
     logger.reset()
 
 
-# Реэкспорт утилит: тесты и вызывающий код обращаются к ним через пакет политики.
 merge_csv = utils.merge_csv

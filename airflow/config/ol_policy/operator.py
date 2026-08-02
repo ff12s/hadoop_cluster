@@ -1,9 +1,4 @@
-"""Совместимость с двумя раскладками ``SparkSubmitOperator`` и тумблер из ``params``.
-
-Обслуживает парс-фазу: это всё, что парсу нужно знать про объект таски, и здесь не
-читается ничего, кроме самого объекта. Здесь же лесенка форса ``task.params`` →
-``dag.params`` и список исключений, которые политика обязана пропускать наружу.
-"""
+"""Совместимость с раскладками ``SparkSubmitOperator`` и тумблер лайниджа из ``params``."""
 
 from __future__ import annotations
 
@@ -13,10 +8,8 @@ from typing import NamedTuple
 from . import utils
 from .logger import warn_once
 
-# Кортеж собирается лениво, при вызове, а не на уровне модуля: этот модуль
-# импортируется из airflow_local_settings, который settings.initialize()
-# подключает раньше configure_orm() — импорт airflow.exceptions на этом этапе
-# забрал бы его из ещё не до конца инициализированного пакета airflow.
+# Имена, а не классы: airflow.exceptions нельзя импортировать на уровне модуля — политика
+# подключается раньше, чем airflow.settings завершает инициализацию.
 _PASSTHROUGH_NAMES = ("AirflowTaskTimeout", "AirflowClusterPolicyViolation", "AirflowClusterPolicySkipDag")
 
 _ATTR_CANDIDATES: dict[str, tuple[str, ...]] = {"conf": ("conf", "_conf"), "jars": ("jars", "_jars")}
@@ -30,12 +23,7 @@ class OperatorAttrs(NamedTuple):
 
 
 def passthrough_exceptions() -> tuple[type[BaseException], ...]:
-    """Классы исключений, которые политика обязана пропускать наружу.
-
-    Собирается поимённо, каждый класс своим ``try/except``: в 2.6.3 нет
-    ``AirflowClusterPolicySkipDag``, и общий ``import`` провалился бы целиком,
-    молча выключив проброс ``AirflowTaskTimeout``. Повторный вызов дёшев:
-    ``import_module`` бьёт в ``sys.modules``, кэшировать кортеж незачем.
+    """Собирает классы исключений Airflow, которые политика пропускает наружу.
 
     :return: кортеж классов; пустой, если Airflow недоступен.
     """
@@ -49,12 +37,7 @@ def passthrough_exceptions() -> tuple[type[BaseException], ...]:
 
 
 def operator_attrs(task: object) -> OperatorAttrs | None:
-    """Имена атрибутов conf и jars у этого оператора.
-
-    В провайдере 4.1.1 conf и jars приватные, в 4.10.0 — публичные, поэтому имя
-    резолвится, а не зашивается. Годным считается только имя, которое разом есть в
-    ``template_fields`` (значит, будет отрендерено) и на объекте (значит, его
-    читает hook).
+    """Определяет имена атрибутов conf и jars у этого оператора.
 
     :param task: таска Airflow.
     :return: имена атрибутов либо None, если раскладка незнакома.
@@ -101,17 +84,13 @@ def _looks_like_spark_submit(task: object, operator_cls: type) -> bool:
 
 
 def _level_forced(owner: object, level: str, dag_id: str, task_id: str) -> bool | None:
-    """Значение тумблера одного уровня лесенки ``params``.
-
-    Ключа нет или он равен None — уровень не высказался, и это нормальное
-    состояние: warning'а нет. Негодное значение пишет warning и трактуется как
-    отсутствующее.
+    """Читает тумблер ``params['openlineage']`` одного уровня лесенки.
 
     :param owner: таска либо DAG, чьи ``params`` читаются.
     :param level: имя уровня для сообщения ("таски" либо "DAG'а").
     :param dag_id: идентификатор DAG'а для ключа дедупликации.
     :param task_id: идентификатор таски для ключа дедупликации.
-    :return: True, False либо None, если уровень не высказался.
+    :return: True, False либо None, если уровень не высказался или значение негодно.
     """
     params = getattr(owner, "params", None)
     if params is None:
@@ -144,11 +123,10 @@ def _level_forced(owner: object, level: str, dag_id: str, task_id: str) -> bool 
 
 
 def lineage_forced(task: object) -> bool | None:
-    """Форс лайниджа из DAG'а: ``task.params``, затем ``dag.params``.
+    """Читает форс лайниджа из DAG'а: сначала ``task.params``, затем ``dag.params``.
 
     :param task: таска Airflow.
-    :return: True — форс-включение, False — форс-выключение, None — решение
-        остаётся за Variable.
+    :return: True — форс-включение, False — форс-выключение, None — решает Variable.
     """
     dag_id, task_id = utils.dag_and_task_ids(task)
     forced = _level_forced(task, "таски", dag_id, task_id)

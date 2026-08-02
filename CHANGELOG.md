@@ -34,7 +34,7 @@
 - `ol_policy` разложен по фазам жизненного цикла на пять модулей (`parse`, `callback`, `variable`, `probe`,
   `operator`) с фасадом `__init__.py` в 79 строк вместо одного файла на 791 строку; поведение не изменилось.
 - `ol_policy` вычищен от дублей. Три копии одного мерджа CSV (`merge_jars`, `merge_listeners` и адаптер
-  ветки jar'ов на рендере) заменены одной `utils.merge_csv(*sources)`; `variable._validate` отдаёт
+  ветки jar'ов на рендере) заменены одной `utils.merge_csv(*sources)`; `variable.validate_config` отдаёт
   типизированный `Config` вместо сырого dict, поэтому рендер больше не разбирает конфиг заново; слот
   демон-потока зонда перешёл с пар `("ok"/"err", значение)` на `bool | BaseException`; `operator_attrs`
   возвращает `OperatorAttrs` вместо `SimpleNamespace`. Из фасада пакета исчезли `merge_jars` и
@@ -48,12 +48,21 @@
   и кэш классов исключений (`operator._passthrough_cache`; `import_module` и так бьёт в
   `sys.modules`). Кэши были мертвы: Airflow форкает свежий процесс под каждую `TaskInstance`,
   ни одно мемо не переживало таску, а единственный живой хит — повторное чтение Variable внутри
-  одного колбэка — закрыт передачей значения: колбэк читает `variable._cfg()` один раз и отдаёт
-  его в `variable._validate(cfg)` (бывший `_validate_cfg` без мемо). Правка Variable теперь
+  одного колбэка — закрыт передачей значения: колбэк читает `variable.read_config()` один раз и отдаёт
+  его в `variable.validate_config(cfg)` (бывший `_validate_cfg` без мемо). Правка Variable теперь
   подхватывается следующей таской сразу, а не через TTL. Вместе с кэшами ушли `utils.now`,
   `reset()` модулей `variable`/`probe`/`operator` и тестовая фикстура `clock`;
   `ol_policy.reset_state()` сбрасывает единственное оставшееся состояние — дедупликацию
   warning'ов логгера.
+- ol_policy: комментарии и docstring'и приведены к правилу «код читается сам». Module-docstring'и
+  сжаты до одной строки назначения, из docstring'ов функций убраны обоснования и история (они живут
+  в `docs/superpowers/specs/`), инлайн-комментарии остались только там, где код без них выглядит
+  ошибкой: порядок `setattr` в записи лайниджа, ленивый импорт `airflow.exceptions`, реэкспорты под
+  `monkeypatch`, подавление `S314` и ограничение глубины подстановки `${var}`. Пять имён
+  переименованы, чтобы снять нужду в комментарии: `variable._cfg` → `read_config`,
+  `variable._validate` → `validate_config`, `callback._write` → `_write_lineage`,
+  `probe._Outcome` → `_EndpointOutcome`, `hadoop_conf._expand` → `_expand_vars`. Поведение,
+  сигнатуры и тексты сообщений не изменились.
 
 ### Известные ограничения
 
@@ -97,7 +106,7 @@
 - Смоук `test-airflow.bat` (шаги 11 и 13) проверял снятый вместе с `render.py` механизм —
   вызов удалённого `ol_policy.ol_macro` и следы Jinja-макроса в собранной команде. Шаг 11 теперь
   дёргает `ol_execute_callback` вручную, как это делает Airflow, и проверяет итоговую команду;
-  шаг 13 проверяет подхват правки Variable через `variable._validate(variable._cfg())`.
+  шаг 13 проверяет подхват правки Variable через `variable.validate_config(variable.read_config())`.
 - Дедлайн зонда WebHDFS (`_PROBE_DEADLINE_SEC`) не учитывал, что каждый эндпоинт при 401 стоит двух
   запросов (без токена и с SPNEGO-токеном): реальный худший случай — 16.5 с против заявленных 8.5,
   из-за чего второй проход-ретрай мог не уложиться в дедлайн ровно там, где SPNEGO и нужен. Дедлайн

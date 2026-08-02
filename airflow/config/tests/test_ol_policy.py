@@ -1317,7 +1317,7 @@ def test_probe_thread_is_daemon(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Чтение Variable: _cfg (§5.4)
+# Чтение Variable: read_config (§5.4)
 # ---------------------------------------------------------------------------
 
 
@@ -1338,7 +1338,7 @@ def test_cfg_returns_dict(variable: Callable[..., SimpleNamespace]) -> None:
         "openlineage_jar": "hdfs://namenode:9000/opt/ol.jar",
     }))
 
-    assert ol_policy.variable._cfg() == {
+    assert ol_policy.variable.read_config() == {
         "enabled": True,
         "spark_conf": spark_conf,
         "openlineage_jar": "hdfs://namenode:9000/opt/ol.jar",
@@ -1354,7 +1354,7 @@ def test_cfg_rejects_empty_object(variable: Callable[..., SimpleNamespace], capl
     """
     variable(raw="{}")
 
-    assert ol_policy.variable._cfg() is None
+    assert ol_policy.variable.read_config() is None
     assert any("enabled (bool)" in message for message in warnings_of(caplog))
 
 
@@ -1367,7 +1367,7 @@ def test_cfg_rejects_old_shape(variable: Callable[..., SimpleNamespace], caplog:
     """
     variable(raw='{"enabled": true, "url": "http://marquez:5000", "namespace": "ns"}')
 
-    assert ol_policy.variable._cfg() is None
+    assert ol_policy.variable.read_config() is None
     messages = warnings_of(caplog)
     assert any("spark_conf" in message for message in messages)
     assert any("openlineage_jar" in message for message in messages)
@@ -1402,7 +1402,7 @@ def test_cfg_returns_none_and_warns(
     """
     variable(raw=raw, error=error)
 
-    assert ol_policy.variable._cfg() is None
+    assert ol_policy.variable.read_config() is None
     messages = warnings_of(caplog)
     assert messages
     assert any(marker in message for message in messages)
@@ -1426,7 +1426,7 @@ def test_cfg_warns_about_auth(variable: Callable[..., SimpleNamespace], caplog: 
         "auth": {"token": "s3cr3t"},
     }))
 
-    ol_policy.variable._cfg()
+    ol_policy.variable.read_config()
 
     assert any("auth" in message for message in warnings_of(caplog))
     assert not any("s3cr3t" in message for message in warnings_of(caplog))
@@ -1451,7 +1451,7 @@ def test_validate_cfg_aggregates_missing_fields(
         )
     )
 
-    assert ol_policy.variable._validate(ol_policy.variable._cfg()) is None
+    assert ol_policy.variable.validate_config(ol_policy.variable.read_config()) is None
 
     messages = warnings_of(caplog)
     aggregated = [m for m in messages if "spark.openlineage.transport.url" in m and "openlineage_jar" in m]
@@ -1933,8 +1933,8 @@ def test_seeded_value_is_accepted_by_the_policy(variable: Callable[..., SimpleNa
     """
     variable(raw=SEEDED_VARIABLE)
 
-    assert ol_policy.variable._cfg() == json.loads(SEEDED_VARIABLE)
-    assert ol_policy.variable._validate(ol_policy.variable._cfg()) is not None
+    assert ol_policy.variable.read_config() == json.loads(SEEDED_VARIABLE)
+    assert ol_policy.variable.validate_config(ol_policy.variable.read_config()) is not None
 
 
 def test_double_encoded_value_is_not_an_object() -> None:
@@ -2043,7 +2043,7 @@ def test_failure_reasons_are_pairwise_distinct(
 
 
 # ---------------------------------------------------------------------------
-# Колбэк-фаза: ol_execute_callback / _inject / _write
+# Колбэк-фаза: ol_execute_callback / _inject / _write_lineage
 # ---------------------------------------------------------------------------
 
 VALID_VARIABLE = json.dumps({
@@ -2179,7 +2179,7 @@ def test_callback_rejects_bad_url(
 ) -> None:
     """Негодный ``url`` в spark_conf выключает лайнидж целиком: таска остаётся нетронутой.
 
-    Регрессия для параметризованного покрытия URL-валидации ``variable._validate``,
+    Регрессия для параметризованного покрытия URL-валидации ``variable.validate_config``,
     ранее закрытого удалённым ``test_macro_rejects_bad_url`` (макро-эра инъекции).
 
     :param layout: раскладка атрибутов conf/jars текущего провайдера (параметризована).
@@ -2218,7 +2218,7 @@ def test_callback_rejects_bad_namespace(
 ) -> None:
     """Негодный ``namespace`` в spark_conf выключает лайнидж целиком: таска остаётся нетронутой.
 
-    Регрессия для параметризованного покрытия namespace-валидации ``variable._validate``,
+    Регрессия для параметризованного покрытия namespace-валидации ``variable.validate_config``,
     ранее закрытого удалённым ``test_macro_rejects_bad_namespace`` (макро-эра инъекции).
 
     :param layout: раскладка атрибутов conf/jars текущего провайдера (параметризована).
@@ -2283,7 +2283,7 @@ def test_callback_never_raises(
     :param monkeypatch: фикстура подмены атрибутов и окружения.
     :return: None.
     """
-    monkeypatch.setattr(ol_policy.variable, "_cfg", lambda: (_ for _ in ()).throw(RuntimeError("boom")))
+    monkeypatch.setattr(ol_policy.variable, "read_config", lambda: (_ for _ in ()).throw(RuntimeError("boom")))
 
     _run_callback(layout.cls(dag=DummyDag(), conf={}))  # не бросает
 

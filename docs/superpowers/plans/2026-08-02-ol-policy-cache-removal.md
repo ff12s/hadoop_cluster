@@ -28,12 +28,12 @@ Variable живёт в течение одного запуска; `probe` — �
 ### Task 1: `variable.py` без мемо + `callback` передаёт значение вниз
 
 - [x] Удалить `_TTL_SEC`, `_now`, `_cfg_memo`, `_validated_memo`, `_cfg_with_stamp`,
-      `_validate_cfg`, `reset()`; `_load_cfg` переименовать в `_cfg`.
-- [x] `callback._inject`: `config = variable._validate(cfg)` вместо `variable._validate_cfg()`.
+      `_validate_cfg`, `reset()`; `_load_cfg` переименовать в `read_config`.
+- [x] `callback._inject`: `config = variable.validate_config(cfg)` вместо `variable._validate_cfg()`.
 - [x] Тесты: удалить `test_cfg_is_memoized`, `test_validate_cfg_runs_once_per_ttl`,
       `test_cfg_memo_expires_by_ttl`, `test_validate_cfg_follows_cfg_ttl`; добавить
       `test_callback_reads_variable_once`, `test_variable_edit_is_picked_up_by_next_callback`;
-      `_validate_cfg()` → `_validate(_cfg())` в оставшихся.
+      `_validate_cfg()` → `validate_config(read_config())` в оставшихся.
 
 ### Task 2: `probe.py` без мемо
 
@@ -52,7 +52,7 @@ Variable живёт в течение одного запуска; `probe` — �
 
 ### Task 4: `spark.jars` уходит из итогового conf
 
-- [x] `callback._write`: `dag_conf_jars = cur_conf.pop("spark.jars", None)` до мерджа;
+- [x] `callback._write_lineage`: `dag_conf_jars = cur_conf.pop("spark.jars", None)` до мерджа;
       итоговый conf пишется без ключа.
 - [x] Тест `test_conf_jars_are_taken_into_jars_and_left_intact` →
       `test_conf_jars_move_into_jars_attribute` (ключа нет, элементы в атрибуте jars).
@@ -60,7 +60,7 @@ Variable живёт в течение одного запуска; `probe` — �
 ### Task 5: смоук и документация
 
 - [x] `tests/test-airflow.bat`: шаг 11 — `'spark.jars' not in conf`; шаг 13 —
-      `_validate(_cfg())`.
+      `validate_config(read_config())`.
 - [x] README + CHANGELOG «Известные ограничения»: мемо-пункт → «кэша нет».
 - [x] CHANGELOG (Unreleased): записи про TTL-мемо обновлены, добавлены записи про снос кэшей
       и `spark.jars`.

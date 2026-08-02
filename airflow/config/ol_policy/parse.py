@@ -1,10 +1,4 @@
-"""Парс-фаза: гейты и идемпотентная дозапись колбэка.
-
-Ноль обращений к Variable, метастору и HDFS — резолв уезжает в ``callback``: парс
-DAG-файла гоняет шедулер на каждый цикл разбора DAG-bag'а под бюджетом
-``[core] dag_file_processor_timeout``, и поход в metastore или сеть на этом месте
-жёг бы этот бюджет не на одну таску, а на каждый цикл разбора DAG-bag'а.
-"""
+"""Парс-фаза: дозапись колбэка лайниджа в ``on_execute_callback`` таски."""
 
 from __future__ import annotations
 
@@ -13,10 +7,7 @@ from .logger import warn_once
 
 
 def inject_openlineage(task: object) -> None:
-    """Дописывает колбэк лайниджа в ``on_execute_callback`` проверенной Spark-таски.
-
-    Ничего, кроме списка колбэков, не трогает: ни conf, ни jars, ни DAG.
-    Значения приезжают на воркере — см. ``callback``.
+    """Идемпотентно дописывает колбэк лайниджа в ``on_execute_callback`` Spark-таски.
 
     :param task: экземпляр ``SparkSubmitOperator``; мутируется на месте.
     :return: None.
